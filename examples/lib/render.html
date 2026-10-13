@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- Headless render page for example PNGs (960x640, no app chrome).
+     Serve the repo root (python3 -m http.server 8790) and open
+     /examples/lib/render.html?f=01-flange-plate.dwg
+     Loads the saved DWG through the embeddable viewer, so the PNG is
+     also a DWG round-trip check. Needs `build-embed` output in dist-embed/. -->
+<html><head><meta charset="utf-8"><title>render</title>
+<style>html,body{margin:0;padding:0;overflow:hidden;background:#0a0e14}
+codecad-viewer{width:960px;height:640px}</style>
+<script type="module" src="../../dist-embed/codecad-viewer.js"></script></head>
+<body><codecad-viewer id="v"></codecad-viewer>
+<script type="module">
+const f = new URLSearchParams(location.search).get("f");
+const v = document.getElementById("v");
+v.setAttribute("src", "../" + f);
+// Debug: &z=x0,y0,x1,y1 zooms to a model-space window once loaded.
+const z = new URLSearchParams(location.search).get("z");
+if (z) {
+  const { cad_call } = await import("../../dist-embed/cadview-web.js");
+  const [x0, y0, x1, y1] = z.split(",").map(Number);
+  const t = setInterval(() => {
+    if (v.shadowRoot?.querySelector(".loading")?.style.display === "none") {
+      clearInterval(t);
+      setTimeout(() => cad_call("zoomTo", JSON.stringify({ bounds: { min: [x0, y0], max: [x1, y1] } })), 300);
+    }
+  }, 100);
+}
+// Strip the viewer's overlay badge/hint so only the drawing remains.
+setInterval(() => v.shadowRoot?.querySelectorAll(".badge,.hint").forEach((e) => e.remove()), 20);
+</script></body></html>

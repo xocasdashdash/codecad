@@ -1,131 +1,150 @@
-// Bicycle frame geometry (road bike side profile)
-// Exercises: addLine, addArc, offset, trim, layers, measure, addText
+// 05 - Road bike frame geometry (size 56), side elevation, scale 1:10.
 //
-// Parametric diamond frame with tube center-lines and wall thickness.
-// Key geometry: seat tube angle, head tube angle, chainstay length.
+// Set out from the bottom bracket the way frame builders do: stack and
+// reach locate the head tube, the head and seat angles fix the tube axes,
+// BB drop + chainstay length place the rear axle (line/circle
+// intersection), and the fork rake places the front axle (offset steering
+// axis meets the axle line). Tubes are strips around their axes, fused
+// into one welded silhouette with a region union. Wheels, seat post,
+// saddle and bars are reference geometry; a geometry chart lists the
+// numbers a fitter asks for.
+//
+// Exercises: lineCircleIntersection, lineLineIntersection, regionClip
+// (union), addSpline (saddle, drop bar), dimAngle, measure (h / v /
+// aligned), table, title block.
 
-const seatAngle = 73;     // degrees from horizontal
-const headAngle = 72;
-const ttLength = 560;     // top tube (mm)
-const stLength = 530;     // seat tube
-const csLength = 410;     // chainstay
-const bbDrop = 70;        // bottom bracket drop below axle line
-const wheelBase = 1000;
-const tubeOD = 32;        // tube outer diameter -> wall offset = OD/2
-const forkRake = 45;
+new Function(cad.readFile("lib/drafting.js"))();
+const { P, dim, text, polar, add, sub, mul, unit, perp, offsetLine } = draft;
+draft.setup({
+  scale: 8,
+  layers: {
+    FRAME_OUT: { color: draft.ACI.white, lineweight: 0.5 },
+    AXIS: { color: draft.ACI.red, linetype: "CL", lineweight: 0.18 },
+    WHEEL: { color: draft.ACI.gray, lineweight: 0.25 },
+    REF: { color: draft.ACI.lightgray, linetype: "PHAN", lineweight: 0.18 },
+  },
+});
 
-cad.addLayer("FRAME", { color: [255, 255, 0] });
-cad.addLayer("WHEELS", { color: [128, 128, 128] });
-cad.addLayer("DIM", { color: [255, 255, 0] });
-cad.addLayer("LABEL", { color: [192, 192, 192] });
-cad.addLayer("_CL", { color: [128, 128, 128] });
+// ── Geometry inputs (mm, degrees) ───────────────────────────────────
+const stack = 565, reach = 385;
+const headAngle = 73, seatAngle = 73.5;
+const headTube = 160, bbDrop = 70, chainstay = 410, rake = 45;
+const tyreR = 672 / 2, rimR = 630 / 2;   // 700x25C
 
-const DEG = Math.PI / 180;
+draft.sheet({
+  at: [-P(107), -P(72)], w: 297, h: 189,
+  title: "ROAD FRAME - SIZE 56",
+  subtitle: "GEOMETRY / SETTING-OUT DRAWING",
+  number: "CC-005", scale: "1:8",
+});
 
-// Key points (all derived from BB as origin)
-const bb = [0, 0]; // bottom bracket
+// ── Setting out ─────────────────────────────────────────────────────
+const BB = [0, 0];
+const axleLine = [[-2000, bbDrop], [2000, bbDrop]];
+const rearAxle = cad.lineCircleIntersection(axleLine, BB, chainstay).sort((a, b) => a[0] - b[0])[0];
 
-// Seat tube: from BB upward at seatAngle
-const stTop = [
-    -stLength * Math.cos(seatAngle * DEG),
-    stLength * Math.sin(seatAngle * DEG)
-];
+const htTop = [reach, stack];
+const steerDir = [Math.cos((-headAngle * Math.PI) / 180), Math.sin((-headAngle * Math.PI) / 180)]; // down the steerer
+const htBot = add(htTop, mul(steerDir, headTube));
+const steerAxis = [add(htTop, mul(steerDir, -200)), add(htTop, mul(steerDir, 900))];
+// Fork rake: the axle sits on a line parallel to the steering axis, `rake` in front.
+const forkLine = offsetLine(steerAxis, rake);  // left of downward direction = forward
+const frontAxle = cad.lineLineIntersection(forkLine, axleLine);
 
-// Rear axle: chainstay goes backward and down
-const rearAxle = [-csLength, -bbDrop];
+const seatDir = polar([0, 0], 1, 180 - seatAngle);
+const seatAxis = [BB, mul(seatDir, 900)];
+// Horizontal top tube meets the head tube 25 mm below its top
+const ttHead = add(htTop, mul(steerDir, 25));
+const ttLine = [[-500, ttHead[1]], [1500, ttHead[1]]];
+const ttSeat = cad.lineLineIntersection(seatAxis, ttLine);
+const stTop = cad.lineLineIntersection(seatAxis, [[-500, ttHead[1] + 20], [1500, ttHead[1] + 20]]);
+const dtHead = add(htBot, mul(steerDir, -35));
+const ssSeat = add(ttSeat, mul(seatDir, -30));
 
-// Front axle
-const frontAxle = [wheelBase - csLength, -bbDrop];
+// Axes (centre lines) of every member
+for (const [a, b] of [[BB, stTop], [ttSeat, ttHead], [BB, dtHead], [BB, rearAxle], [rearAxle, ssSeat]])
+  cad.addLine(a, b, { layer: "AXIS" });
+cad.addLine(steerAxis[0], add(htTop, mul(steerDir, 560)), { layer: "AXIS" });
+cad.addLine([rearAxle[0] - tyreR - 40, bbDrop], [frontAxle[0] + tyreR + 40, bbDrop], { layer: "AXIS" });
 
-// Head tube bottom: derive from top tube + head angle
-// Top tube runs horizontal from seat tube top
-const ttEnd = [stTop[0] + ttLength, stTop[1]];
-
-// Head tube runs down from ttEnd at headAngle
-const htLength = 180;
-const htBottom = [
-    ttEnd[0] + htLength * Math.cos(headAngle * DEG),
-    ttEnd[1] - htLength * Math.sin(headAngle * DEG)
-];
-
-// ── Centerlines ────────────────────────────────────────────────────
-
-// Seat tube
-cad.addLine(bb, stTop, { layer: "_CL" });
-
-// Top tube
-cad.addLine(stTop, ttEnd, { layer: "_CL" });
-
-// Down tube (BB to head tube bottom)
-cad.addLine(bb, htBottom, { layer: "_CL" });
-
-// Head tube
-cad.addLine(ttEnd, htBottom, { layer: "_CL" });
-
-// Chainstays (BB to rear axle)
-cad.addLine(bb, rearAxle, { layer: "_CL" });
-
-// Seatstays (seat tube top to rear axle)
-cad.addLine(stTop, rearAxle, { layer: "_CL" });
-
-// Fork (head tube bottom toward front axle, with rake)
-const forkEnd = [frontAxle[0], frontAxle[1]];
-cad.addLine(htBottom, forkEnd, { layer: "_CL" });
-
-// ── Frame tubes (offset from centerlines) ──────────────────────────
-
-const hw = tubeOD / 2; // half-width
-
-// Draw each tube as two offset lines
-function drawTube(p0, p1, width) {
-    const dx = p1[0] - p0[0], dy = p1[1] - p0[1];
-    const len = Math.sqrt(dx * dx + dy * dy);
-    const nx = -dy / len * width, ny = dx / len * width;
-    cad.addLine([p0[0] + nx, p0[1] + ny], [p1[0] + nx, p1[1] + ny], { layer: "FRAME" });
-    cad.addLine([p0[0] - nx, p0[1] - ny], [p1[0] - nx, p1[1] - ny], { layer: "FRAME" });
+// ── Tubes: strips around the axes, fused into one silhouette ────────
+function strip(a, b, ra, rb = ra, ext = 0) {
+  const d = unit(sub(b, a)), n = perp(d);
+  const a2 = sub(a, mul(d, ext)), b2 = add(b, mul(d, ext));
+  return [add(a2, mul(n, ra)), add(b2, mul(n, rb)), sub(b2, mul(n, rb)), sub(a2, mul(n, ra))];
 }
+const crown = add(htBot, mul(steerDir, 30));
+const tubes = [
+  strip(htTop, htBot, 22, 22, 0),                // head tube 44
+  strip(ttSeat, ttHead, 15.9),                   // top tube 31.8
+  strip(BB, dtHead, 19),                         // down tube 38
+  strip(BB, stTop, 15.9),                        // seat tube 31.8
+  strip(BB, rearAxle, 11, 7),                    // chainstay, tapered
+  strip(ssSeat, rearAxle, 8, 6),                 // seat stay
+  strip(crown, frontAxle, 15, 7),                // fork blade, tapered
+  strip(htBot, crown, 24, 24, 4),                // fork crown
+];
+const bbShell = { center: BB, radius: 21 };
+const frame = cad.regionClip(tubes, [bbShell], "union");
+for (const r of frame) {
+  cad.addPolyline(r.outer, { closed: true, layer: "FRAME_OUT" });
+  r.holes.forEach((h) => cad.addPolyline(h, { closed: true, layer: "FRAME_OUT" }));
+}
+// Dropouts and BB shell face
+for (const ax of [rearAxle, frontAxle]) cad.addCircle(ax, 6, { layer: "FRAME_OUT" });
+cad.addCircle(BB, 12, { layer: "THIN" });
 
-drawTube(bb, stTop, hw);
-drawTube(stTop, ttEnd, hw);
-drawTube(bb, htBottom, hw);
-drawTube(ttEnd, htBottom, hw * 0.8); // head tube slightly thinner
-drawTube(bb, rearAxle, hw * 0.6);    // chainstays thinner
-drawTube(stTop, rearAxle, hw * 0.5); // seatstays thinnest
-drawTube(htBottom, forkEnd, hw * 0.6);
+// ── Wheels ──────────────────────────────────────────────────────────
+for (const ax of [rearAxle, frontAxle]) {
+  cad.addCircle(ax, tyreR, { layer: "WHEEL" });
+  cad.addCircle(ax, rimR, { layer: "WHEEL" });
+  cad.addCircle(ax, rimR - 25, { layer: "WHEEL" });
+  cad.addCircle(ax, 28, { layer: "WHEEL" });
+}
+const ground = bbDrop - tyreR;
+cad.addLine([rearAxle[0] - tyreR - 60, ground], [frontAxle[0] + tyreR + 60, ground], { layer: "THIN" });
 
-// ── Wheels ─────────────────────────────────────────────────────────
+// ── Reference: seat post, saddle, stem and drop bar ─────────────────
+const saddleH = 740;                        // BB to saddle top along the seat axis
+const sTop = mul(seatDir, saddleH - 20);
+cad.addPolyline(strip(stTop, sTop, 13.6), { closed: true, layer: "REF" });
+const sc = mul(seatDir, saddleH);
+cad.addSpline([add(sc, [-150, -10]), add(sc, [-110, 8]), add(sc, [-20, 2]), add(sc, [60, -2]), add(sc, [120, -12])], { fit: true, layer: "REF" });
+cad.addSpline([add(sc, [-150, -10]), add(sc, [-60, -30]), add(sc, [60, -24]), add(sc, [120, -12])], { fit: true, layer: "REF" });
+const spacer = add(htTop, mul(steerDir, -30));
+cad.addPolyline(strip(htTop, spacer, 16), { closed: true, layer: "REF" });
+const stemEnd = add(spacer, polar([0, 0], 100, -6));
+cad.addPolyline(strip(add(spacer, mul(steerDir, 10)), stemEnd, 14), { closed: true, layer: "REF" });
+cad.addSpline([stemEnd, add(stemEnd, [55, 4]), add(stemEnd, [80, -30]), add(stemEnd, [60, -100]), add(stemEnd, [10, -125]), add(stemEnd, [-30, -140])], { fit: true, layer: "REF" });
+cad.addCircle(stemEnd, 15.9, { layer: "REF" });
 
-const wheelR = 340; // 700c
-const hubR = 25;
+// ── Dimensions ──────────────────────────────────────────────────────
+const d0 = { decimals: 0, h: 3 };
+dim(rearAxle, frontAxle, -(bbDrop - ground) / P(1) - 10, { ...d0, dir: "h", label: "WHEELBASE <>" });
+dim(BB, htTop, -7, { ...d0, dir: "v", label: "STACK <>" });
+dim(BB, htTop, 12, { ...d0, dir: "h", label: "REACH <>" });
+dim(ttSeat, ttHead, -7, { ...d0, dir: "h", label: "ETT <>" });
+dim(rearAxle, BB, -9, d0);
+dim(BB, [BB[0], bbDrop], -12, { ...d0, dir: "v", h: 2.5 });
+// Angles are measured CCW from the first ray to the second.
+cad.addLine(htTop, add(htTop, [-P(11), 0]), { layer: "DIM" });
+const angOpts = { text_height: P(2.8), layer: "DIM", label: "<>°" };
+draft.outlineFills(cad.dimAngle(BB, mul(seatDir, 100), [-100, 0], { ...angOpts, radius: P(15) }).ids);
+draft.outlineFills(cad.dimAngle(htTop, sub(htTop, steerDir), add(htTop, [-1, 0]), { ...angOpts, radius: P(9) }).ids);
 
-// Rear wheel
-cad.addCircle(rearAxle, wheelR, { layer: "WHEELS" });
-cad.addCircle(rearAxle, hubR, { layer: "WHEELS" });
+// ── Geometry chart ──────────────────────────────────────────────────
+const ett = ttHead[0] - ttSeat[0];
+const wb = frontAxle[0] - rearAxle[0];
+const trail = (frontAxle[1] - ground) / Math.tan((headAngle * Math.PI) / 180) - rake / Math.sin((headAngle * Math.PI) / 180);
+const r0 = (v) => String(Math.round(v));
+draft.table([P(225 - 107), P(165 - 72)], [
+  ["GEOMETRY", "SIZE 56"],
+  ["STACK", r0(stack)], ["REACH", r0(reach)],
+  ["HEAD ANGLE", `${headAngle}°`], ["SEAT ANGLE", `${seatAngle}°`],
+  ["EFF. TOP TUBE", r0(ett)], ["HEAD TUBE", r0(headTube)],
+  ["CHAINSTAY", r0(chainstay)], ["BB DROP", r0(bbDrop)],
+  ["FORK RAKE", r0(rake)], ["TRAIL", r0(trail)],
+  ["WHEELBASE", r0(wb)],
+], [34, 20], { h: 2.3, rowH: 5, align: [null, "right"] });
 
-// Front wheel
-cad.addCircle(frontAxle, wheelR, { layer: "WHEELS" });
-cad.addCircle(frontAxle, hubR, { layer: "WHEELS" });
-
-// ── Bottom bracket circle ──────────────────────────────────────────
-cad.addCircle(bb, 35, { layer: "FRAME" });
-
-// ── Dimensions ─────────────────────────────────────────────────────
-
-// Wheelbase
-cad.measure(rearAxle, frontAxle, { offset: -wheelR - 60, layer: "DIM", text_height: 20 });
-
-// Seat tube
-cad.measure(bb, stTop, { offset: -50, layer: "DIM", text_height: 15 });
-
-// Top tube
-cad.measure(stTop, ttEnd, { offset: 40, layer: "DIM", text_height: 15 });
-
-// Chainstay
-cad.measure(bb, rearAxle, { offset: -40, layer: "DIM", text_height: 12 });
-
-// ── Labels ─────────────────────────────────────────────────────────
-
-cad.addText("ROAD BIKE FRAME", [-csLength, -wheelR - 100], { height: 25, layer: "LABEL" });
-cad.addText(`ST ${seatAngle} deg  HT ${headAngle} deg  TT ${ttLength}mm`, [-csLength, -wheelR - 135], { height: 15, layer: "LABEL" });
-
-cad.describe();
+return { ett, wb, trail, rearAxle, frontAxle };
