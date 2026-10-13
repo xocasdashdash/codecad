@@ -1,11 +1,34 @@
 @import url("https://fonts.googleapis.com/css2?family=Jost:wght@400;500&family=JetBrains+Mono:wght@400&display=swap");
 
 :root {
+  /* Brand palette (docs/brand/brand-guide.md). Amber is crosshair-only. */
   --void: #0a0e14;
   --text: #e8e8e8;
   --muted: #6b7280;
   --grid: #151a22;
-  --accent: #ffb000;
+  --accent: #ffb000; /* crosshair only (lives in logo.svg); never use for UI */
+
+  /* Derived tones: secondary text with readable contrast, hairlines */
+  --text-strong: #ffffff; /* hover/emphasis */
+  --text-2: #9ba3af;
+  --line: #1f2630;
+  --line-strong: #2e3744;
+
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --sans: "Jost", system-ui, sans-serif;
+
+  /* 4px spacing scale */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  --radius: 4px;
+  --width: 960px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -13,58 +36,93 @@
 body {
   background: var(--void);
   color: var(--text);
-  font-family: "Jost", system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.6;
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-a { color: var(--text); }
-a:hover { color: var(--accent); }
-code { font-family: "JetBrains Mono", monospace; font-size: 13px; }
+a { color: var(--text); text-underline-offset: 3px; }
+a:hover { color: var(--text-strong); }
+:focus-visible { outline: 1px solid var(--text); outline-offset: 3px; }
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  color: var(--text);
+}
 
 .container {
-  max-width: 900px;
+  max-width: calc(var(--width) + 2 * var(--s5));
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 var(--s5);
 }
+
+section + section { border-top: 1px solid var(--line); }
+.hero + .features { border-top: 0; padding-top: var(--s2); }
+
+h2 {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+}
+
+.lede {
+  color: var(--text-2);
+  font-size: 15px;
+  margin-top: var(--s1);
+}
+
+.section-head { margin-bottom: var(--s5); }
 
 /* ── Hero ────────────────────────────────────────────────────────── */
 
 .hero {
   text-align: center;
-  padding: 80px 0 48px;
+  padding: var(--s8) 0 var(--s7);
 }
 
 .hero .logo {
-  width: 320px;
-  max-width: 80%;
+  display: block;
+  width: 300px;
+  max-width: 78%;
   height: auto;
-  margin-bottom: 12px;
+  margin: 0 auto var(--s4);
 }
 
 .hero .tagline {
-  color: var(--muted);
-  font-size: 17px;
-  max-width: 520px;
-  margin: 0 auto 32px;
+  color: var(--text-2);
+  font-size: 18px;
+  line-height: 1.5;
+  max-width: 34em;
+  margin: 0 auto var(--s6);
+  text-wrap: balance;
 }
 
 .hero .actions {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: var(--s3);
   justify-content: center;
 }
 
 .btn {
-  display: inline-block;
-  padding: 10px 24px;
-  border-radius: 4px;
-  font-family: "JetBrains Mono", monospace;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  min-width: 128px;
+  padding: 0 var(--s5);
+  border-radius: var(--radius);
+  font-family: var(--mono);
   font-size: 13px;
+  letter-spacing: 0.01em;
   text-decoration: none;
-  border: 1px solid var(--muted);
-  transition: border-color 0.15s, color 0.15s;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  transition: border-color 0.12s, background-color 0.12s, color 0.12s;
 }
 .btn:hover { border-color: var(--text); color: var(--text); }
 .btn-primary {
@@ -72,50 +130,55 @@ code { font-family: "JetBrains Mono", monospace; font-size: 13px; }
   color: var(--void);
   border-color: var(--text);
 }
-.btn-primary:hover { background: #fff; color: var(--void); }
+.btn-primary:hover { background: var(--text-strong); border-color: var(--text-strong); color: var(--void); }
 
 /* ── Features ────────────────────────────────────────────────────── */
 
 .features {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  padding: 48px 0;
+  gap: var(--s5) var(--s6);
+  padding: var(--s7) 0;
+}
+
+.feature {
+  border-top: 1px solid var(--line-strong);
+  padding-top: var(--s4);
 }
 
 .feature h3 {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 500;
-  margin-bottom: 6px;
+  line-height: 1.3;
+  margin-bottom: var(--s2);
 }
 
 .feature p {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.55;
 }
 
 /* ── Code sample ────────────────────────────────────────────────── */
 
-.code-section {
-  padding: 48px 0;
-}
-
-.code-section h2 {
-  font-size: 18px;
-  font-weight: 500;
-  margin-bottom: 16px;
-}
+.code-section { padding: var(--s7) 0; }
 
 pre {
-  background: var(--grid);
-  border-radius: 6px;
-  padding: 20px 24px;
+  /* Scroll cue: an edge shadow appears only while more code is hidden
+     to the right; the 'local' cover slides over it at the scroll end. */
+  background:
+    linear-gradient(to left, var(--grid) 40%, transparent) right / 32px 100% no-repeat local,
+    linear-gradient(to left, rgba(232, 232, 232, 0.12), transparent) right / 16px 100% no-repeat scroll,
+    var(--grid);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--s5);
   overflow-x: auto;
-  font-family: "JetBrains Mono", monospace;
+  font-family: var(--mono);
   font-size: 13px;
-  line-height: 1.6;
-  color: var(--muted);
+  line-height: 1.7;
+  color: var(--text-2);
+  tab-size: 2;
 }
 pre .kw { color: #c678dd; }
 pre .str { color: #98c379; }
@@ -123,69 +186,96 @@ pre .fn { color: #61afef; }
 pre .num { color: #d19a66; }
 pre .cmt { color: #5c6370; }
 
+.viewer {
+  display: block;
+  width: 100%;
+  height: clamp(280px, 48vw, 440px);
+  margin-top: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--grid);
+  overflow: hidden;
+}
+
 /* ── Examples ────────────────────────────────────────────────────── */
 
-.examples-section {
-  padding: 48px 0;
-}
+.examples-section { padding: var(--s7) 0; }
 
-.examples-section h2 {
-  font-size: 18px;
-  font-weight: 500;
-  margin-bottom: 20px;
-}
-
+/* Flex (not grid) so any entry count works: a partial last row is
+   centered instead of left-hanging. --cols is set per breakpoint. */
 .examples-gallery {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  --cols: 3;
+  --gap: var(--s4);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--gap);
 }
 
 .example-link {
-  display: block;
+  flex: 0 0 calc((100% - (var(--cols) - 1) * var(--gap)) / var(--cols));
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   text-decoration: none;
-  border-radius: 6px;
+  color: var(--text);
+  background: var(--grid);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
   overflow: hidden;
-  border: 1px solid var(--grid);
-  transition: border-color 0.15s;
+  transition: border-color 0.12s;
 }
-.example-link:hover { border-color: var(--muted); }
+.example-link:hover { border-color: var(--text-2); color: var(--text); }
+.example-link:focus-visible { outline-offset: 2px; border-color: var(--text-2); }
 
 .example-link img {
   width: 100%;
-  aspect-ratio: 4/3;
+  aspect-ratio: 3 / 2;  /* source PNGs are 960x640 */
   object-fit: cover;
   display: block;
   background: #000;
 }
 
 .example-link .caption {
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1px solid var(--line);
 }
-.example-link .caption .title { font-weight: 500; }
+.example-link .caption .title {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.3;
+}
 .example-link .caption .desc {
-  color: var(--muted);
-  font-size: 11px;
-  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: var(--s1);
 }
 
 /* ── Footer ──────────────────────────────────────────────────────── */
 
 .footer {
-  padding: 48px 0 32px;
+  padding: var(--s5) 0 var(--s6);
   text-align: center;
   color: var(--muted);
-  font-size: 12px;
-  border-top: 1px solid var(--grid);
+  font-size: 13px;
+  border-top: 1px solid var(--line);
 }
-.footer a { color: var(--muted); }
+.footer a { color: var(--text-2); }
 .footer a:hover { color: var(--text); }
 
 /* ── Responsive ──────────────────────────────────────────────────── */
 
-@media (max-width: 700px) {
-  .features { grid-template-columns: 1fr; }
-  .examples-gallery { grid-template-columns: repeat(2, 1fr); }
-  .hero h1 { font-size: 28px; }
+@media (max-width: 760px) {
+  .features { grid-template-columns: 1fr; gap: var(--s5); }
+  .examples-gallery { --cols: 2; }
+}
+
+@media (max-width: 520px) {
+  .container { padding: 0 var(--s4); }
+  .hero { padding: var(--s7) 0 var(--s6); }
+  .hero .tagline { font-size: 16px; margin-bottom: var(--s5); }
+  .features, .code-section, .examples-section { padding: var(--s6) 0; }
+  .examples-gallery { --cols: 1; }
+  pre { padding: var(--s4); font-size: 12px; }
 }

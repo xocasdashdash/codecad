@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CodeCAD - 2D CAD you can program</title>
+  <meta name="description" content="Open-source 2D CAD in the browser. Every drawing operation is a function call.">
+  <meta name="theme-color" content="#0a0e14">
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="stylesheet" href="site.css">
 </head>
@@ -25,85 +27,143 @@
   <section class="features">
     <div class="feature">
       <h3>DWG in the browser</h3>
-      <p>Opens .dwg files (R13-R2018) with infinite vector zoom. GPU
-      rendering via Vello/WebGPU, CPU fallback via egui.</p>
+      <p>Opens .dwg files (R13&ndash;R2018) with infinite vector zoom.
+      Vello/WebGPU rendering, egui CPU fallback.</p>
     </div>
     <div class="feature">
       <h3>Scriptable API</h3>
-      <p>Every operation is <code>cad.addLine()</code>,
-      <code>cad.addCircle()</code>, etc. Drive it from the console,
-      your own code, or a language model.</p>
+      <p>Every operation is a call like <code>cad.addLine()</code>.
+      Drive it from the console, your own code, or a language model.</p>
     </div>
     <div class="feature">
       <h3>Real-time sync</h3>
-      <p>Optional Rust server syncs edits across browsers via Yrs CRDT
-      over WebTransport. Server-side JS scripting via Wasmtime sandbox.</p>
+      <p>An optional Rust server syncs edits across browsers (Yrs CRDT
+      over WebTransport) and runs JS scripts in a Wasmtime sandbox.</p>
     </div>
   </section>
 
   <section class="code-section">
-    <h2>Draw with code</h2>
-    <pre><span class="cmt">// Flange plate: center bore, bolt circle, dimensions</span>
-<span class="fn">cad.addCircle</span>([<span class="num">0</span>, <span class="num">0</span>], <span class="num">150</span>, { <span class="str">layer</span>: <span class="str">"FLANGE"</span> })
-<span class="fn">cad.addCircle</span>([<span class="num">0</span>, <span class="num">0</span>],  <span class="num">40</span>, { <span class="str">layer</span>: <span class="str">"BORE"</span> })
+    <div class="section-head">
+      <h2>Draw with code</h2>
+      <p class="lede">Plain JavaScript calls. Pan and zoom the result below.</p>
+    </div>
+    <pre><span class="cmt">// Plate flange DN80 PN16: bolt pattern on a pitch circle</span>
+<span class="fn">cad.addLayer</span>(<span class="str">"OUTLINE"</span>, { <span class="str">color</span>: [<span class="num">255</span>, <span class="num">255</span>, <span class="num">255</span>] })
+<span class="fn">cad.addLayer</span>(<span class="str">"CENTER"</span>, { <span class="str">color</span>: [<span class="num">255</span>, <span class="num">0</span>, <span class="num">0</span>], <span class="str">linetype</span>: <span class="str">"Center"</span> })
 
-<span class="kw">for</span> (<span class="kw">let</span> i = <span class="num">0</span>; i &lt; <span class="num">8</span>; i++) {
-  <span class="kw">const</span> a = i * Math.PI / <span class="num">4</span>
-  <span class="fn">cad.addCircle</span>([<span class="num">110</span> * Math.cos(a), <span class="num">110</span> * Math.sin(a)], <span class="num">8</span>)
-}
+<span class="fn">cad.addCircle</span>([<span class="num">0</span>, <span class="num">0</span>], <span class="num">100</span>,  { <span class="str">layer</span>: <span class="str">"OUTLINE"</span> })   <span class="cmt">// Ø200 outside</span>
+<span class="fn">cad.addCircle</span>([<span class="num">0</span>, <span class="num">0</span>], <span class="num">45.5</span>, { <span class="str">layer</span>: <span class="str">"OUTLINE"</span> })   <span class="cmt">// Ø91 bore</span>
+<span class="fn">cad.addCircle</span>([<span class="num">0</span>, <span class="num">0</span>], <span class="num">80</span>,   { <span class="str">layer</span>: <span class="str">"CENTER"</span> })    <span class="cmt">// Ø160 PCD</span>
 
-<span class="fn">cad.measure</span>([<span class="num">0</span>, <span class="num">0</span>], [<span class="num">150</span>, <span class="num">0</span>], { <span class="str">offset</span>: <span class="num">30</span> })</pre>
-    <codecad-viewer src="examples/01-flange-plate.dwg" style="width:100%;height:400px;margin-top:16px;border-radius:6px"></codecad-viewer>
+<span class="cmt">// One bolt hole, then a polar array of 8</span>
+<span class="kw">const</span> a = Math.PI / <span class="num">8</span>
+<span class="kw">const</span> hole = <span class="fn">cad.addCircle</span>([<span class="num">80</span> * Math.cos(a), <span class="num">80</span> * Math.sin(a)], <span class="num">9</span>, { <span class="str">layer</span>: <span class="str">"OUTLINE"</span> })
+<span class="fn">cad.array</span>(hole, { <span class="str">polar</span>: { <span class="str">center</span>: [<span class="num">0</span>, <span class="num">0</span>], <span class="str">count</span>: <span class="num">8</span> } })
+
+<span class="fn">cad.dimDiameter</span>({ <span class="str">center</span>: [<span class="num">0</span>, <span class="num">0</span>], <span class="str">radius</span>: <span class="num">100</span> }, { <span class="str">angle</span>: <span class="num">30</span> })</pre>
+    <codecad-viewer class="viewer" src="examples/01-flange-plate.dwg"></codecad-viewer>
   </section>
 
   <script type="module" src="embed/codecad-viewer.js"></script>
 
   <section class="examples-section">
-    <h2>Example drawings</h2>
-    <p class="tagline" style="text-align:left;margin-bottom:16px">
-      All generated by AI agents in a single pass. No manual edits.
-    </p>
+    <div class="section-head">
+      <h2>Example drawings</h2>
+      <p class="lede">Drawn by AI agents through the same JavaScript API. Click to open any one in the app.</p>
+    </div>
     <div class="examples-gallery">
+      <!-- Gallery entry template (any count works; a partial last row is centered).
+           Images are 960x640 PNGs shown at 3:2.
+      <a href="app/?file=../examples/NN-name.dwg" class="example-link">
+        <img src="examples/NN-name.png" alt="Title" loading="lazy">
+        <div class="caption">
+          <div class="title">Title</div>
+          <div class="desc">One-line description</div>
+        </div>
+      </a>
+      -->
       <a href="app/?file=../examples/01-flange-plate.dwg" class="example-link">
         <img src="examples/01-flange-plate.png" alt="Flange Plate" loading="lazy">
         <div class="caption">
           <div class="title">Flange Plate</div>
-          <div class="desc">Parametric pipe flange, 8 bolt holes, dimensions</div>
+          <div class="desc">DN80 PN16 flange, front view and section A-A</div>
         </div>
       </a>
       <a href="app/?file=../examples/02-fibonacci-spiral.dwg" class="example-link">
         <img src="examples/02-fibonacci-spiral.png" alt="Fibonacci Spiral" loading="lazy">
         <div class="caption">
           <div class="title">Fibonacci Spiral</div>
-          <div class="desc">Golden ratio construction, quarter-circle arcs</div>
+          <div class="desc">Square tiling, spiral and golden-ratio construction</div>
         </div>
       </a>
       <a href="app/?file=../examples/03-roof-truss.dwg" class="example-link">
-        <img src="examples/03-roof-truss.png" alt="Roof Truss" loading="lazy">
+        <img src="examples/03-roof-truss.png" alt="Howe Roof Truss" loading="lazy">
         <div class="caption">
           <div class="title">Howe Roof Truss</div>
-          <div class="desc">12m span structural timber truss</div>
+          <div class="desc">Timber truss with trimmed joints and member schedule</div>
         </div>
       </a>
       <a href="app/?file=../examples/04-motor-schematic.dwg" class="example-link">
-        <img src="examples/04-motor-schematic.png" alt="Motor Schematic" loading="lazy">
+        <img src="examples/04-motor-schematic.png" alt="Motor Starter" loading="lazy">
         <div class="caption">
           <div class="title">Motor Starter</div>
-          <div class="desc">3-phase DOL schematic with control circuit</div>
+          <div class="desc">IEC direct-on-line starter, power and control</div>
         </div>
       </a>
       <a href="app/?file=../examples/05-bicycle-frame.dwg" class="example-link">
         <img src="examples/05-bicycle-frame.png" alt="Bicycle Frame" loading="lazy">
         <div class="caption">
           <div class="title">Bicycle Frame</div>
-          <div class="desc">Road bike diamond frame geometry</div>
+          <div class="desc">Road frame set out from stack, reach and angles</div>
         </div>
       </a>
       <a href="app/?file=../examples/06-piston-section.dwg" class="example-link">
         <img src="examples/06-piston-section.png" alt="Piston Section" loading="lazy">
         <div class="caption">
           <div class="title">Piston Section</div>
-          <div class="desc">Half-section with hatching and mirror</div>
+          <div class="desc">Half-section with ring-groove detail at 3:1</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/07-floor-plan.dwg" class="example-link">
+        <img src="examples/07-floor-plan.png" alt="Floor Plan" loading="lazy">
+        <div class="caption">
+          <div class="title">Floor Plan</div>
+          <div class="desc">Apartment plan with doors, areas and room schedule</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/08-distribution-board.dwg" class="example-link">
+        <img src="examples/08-distribution-board.png" alt="Distribution Board" loading="lazy">
+        <div class="caption">
+          <div class="title">Distribution Board</div>
+          <div class="desc">Single-line diagram: main switch, RCDs, 10 circuits</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/09-spur-gears.dwg" class="example-link">
+        <img src="examples/09-spur-gears.png" alt="Spur Gears" loading="lazy">
+        <div class="caption">
+          <div class="title">Spur Gears</div>
+          <div class="desc">Meshing involute pair with gear data table</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/10-cam-follower.dwg" class="example-link">
+        <img src="examples/10-cam-follower.png" alt="Cam and Follower" loading="lazy">
+        <div class="caption">
+          <div class="title">Cam and Follower</div>
+          <div class="desc">Cycloidal cam profile with displacement diagram</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/11-pid.dwg" class="example-link">
+        <img src="examples/11-pid.png" alt="P&amp;ID" loading="lazy">
+        <div class="caption">
+          <div class="title">P&amp;ID</div>
+          <div class="desc">Tank and pump with level and flow control loops</div>
+        </div>
+      </a>
+      <a href="app/?file=../examples/12-site-plan.dwg" class="example-link">
+        <img src="examples/12-site-plan.png" alt="Site Plan" loading="lazy">
+        <div class="caption">
+          <div class="title">Site Plan</div>
+          <div class="desc">Boundary from bearings, setbacks, parking, contours</div>
         </div>
       </a>
     </div>
