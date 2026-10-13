@@ -519,6 +519,31 @@ pub(crate) fn shape_to_entity_type(
             e.set_color(color);
             ae::EntityType::Spline(e)
         }
+        // Straight-edged triangles/quads without holes (arrowheads, small
+        // markers) become DWG SOLID entities: compact, and readers don't
+        // drop them as degenerate hatches.
+        Shape::SolidFill { boundary, holes }
+            if holes.is_empty()
+                && (3..=4).contains(&boundary.len())
+                && boundary.iter().all(|e| matches!(e, FillEdge::LineTo(_))) =>
+        {
+            let p: Vec<Vector3> = boundary
+                .iter()
+                .filter_map(|e| match e {
+                    FillEdge::LineTo(p) => Some(Vector3::new(p.x, p.y, 0.0)),
+                    _ => None,
+                })
+                .collect();
+            // SOLID vertex order is "Z" shaped: 1, 2, 4, 3 for a quad.
+            let mut e = if p.len() == 3 {
+                ae::Solid::new(p[0], p[1], p[2], p[2])
+            } else {
+                ae::Solid::new(p[0], p[1], p[3], p[2])
+            };
+            e.set_layer(layer.to_string());
+            e.set_color(color);
+            ae::EntityType::Solid(e)
+        }
         Shape::SolidFill { boundary, holes } => {
             let mut hatch = ae::Hatch::solid();
             hatch.pattern.name = "SOLID".to_string();
@@ -634,7 +659,9 @@ pub(crate) fn fill_edges_to_boundary_path(
                     radius: *radius,
                     start_angle: *start_angle,
                     end_angle: *end_angle,
-                    counter_clockwise: sweep < PI * 2.0 && sweep > 0.0,
+                    // FillEdge arcs are always counter-clockwise (a full
+                    // circle has sweep 2π).
+                    counter_clockwise: true,
                 }));
                 prev = Point::new(
                     center.x + radius * end_angle.cos(),
@@ -778,7 +805,7 @@ pub(crate) fn lwpolyline_to_edges(
                 edges.push(FillEdge::LineTo(p1));
                 continue;
             }
-            let radius = chord / (2.0 * included.sin().abs());
+            let radius = chord / (2.0 * (included / 2.0).sin().abs());
             let sagitta = bulge * chord / 2.0;
             let mx = (p0.x + p1.x) / 2.0;
             let my = (p0.y + p1.y) / 2.0;
@@ -1060,7 +1087,7 @@ pub(crate) fn hatch_boundary_to_shapes(path: &acadrust::entities::BoundaryPath) 
                         if chord < 1e-12 {
                             continue;
                         }
-                        let radius = chord / (2.0 * included.sin().abs());
+                        let radius = chord / (2.0 * (included / 2.0).sin().abs());
                         let sagitta = bulge * chord / 2.0;
                         let mx = (p0.x + p1.x) / 2.0;
                         let my = (p0.y + p1.y) / 2.0;
@@ -1541,6 +1568,34 @@ pub(crate) fn build_document(cad: acadrust::CadDocument) -> Result<Document> {
                             position: Point::new(mt.insertion_point.x, mt.insertion_point.y),
                             height: mt.height,
                             rotation: mt.rotation,
+                        },
+                        linetype: String::new(),
+                        linetype_scale: 1.0,
+                    });
+                }
+            }
+            EntityType::Solid(sol) => {
+                // SOLID: Z-ordered corners 1, 2, 4, 3; 3 == 4 for triangles.
+                let c = |v: &acadrust::types::Vector3| Point::new(v.x, v.y);
+                let (p1, p2, p3, p4) = (
+                    c(&sol.first_corner),
+                    c(&sol.second_corner),
+                    c(&sol.third_corner),
+                    c(&sol.fourth_corner),
+                );
+                let mut pts = vec![p1, p2, p4, p3];
+                pts.dedup_by(|a, b| geo::distance(*a, *b) < 1e-12);
+                if pts.len() > 1 && geo::distance(pts[0], *pts.last().unwrap_or(&p1)) < 1e-12 {
+                    pts.pop();
+                }
+                if pts.len() >= 3 {
+                    raw_entities.push(RawEntity {
+                        owner: sol.common.owner_handle,
+                        layer: sol.common.layer.clone(),
+                        color: sol.common.color,
+                        shape: Shape::SolidFill {
+                            boundary: pts.into_iter().map(FillEdge::LineTo).collect(),
+                            holes: Vec::new(),
                         },
                         linetype: String::new(),
                         linetype_scale: 1.0,

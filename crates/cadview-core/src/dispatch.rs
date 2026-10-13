@@ -1,10 +1,9 @@
 use crate::document::*;
 use crate::dwg::load_dwg;
 use crate::geo;
-use crate::hatch::{clip_line_to_polygon, entity_endpoints};
-use crate::text;
+use crate::hatch::entity_endpoints;
 use crate::types::*;
-use kurbo::{BezPath, Circle, Line, Point};
+use kurbo::{BezPath, Point};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -12,13 +11,13 @@ use std::f64::consts::PI;
 // ── Color argument: accepts [r,g,b] array or ACI index number ─────────
 
 #[derive(Debug, Clone)]
-enum ColorArg {
+pub(crate) enum ColorArg {
     Rgb([u8; 3]),
     Aci(u8),
 }
 
 impl ColorArg {
-    fn resolve(self) -> Color {
+    pub(crate) fn resolve(self) -> Color {
         match self {
             ColorArg::Rgb(c) => Color::rgb(c[0], c[1], c[2]),
             ColorArg::Aci(i) => crate::dwg::aci_to_rgb(i),
@@ -387,37 +386,6 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
-        "addPolyline" => {
-            #[derive(Deserialize)]
-            struct Args {
-                points: Vec<[f64; 2]>,
-                #[serde(default)]
-                closed: bool,
-                #[serde(default = "default_layer")]
-                layer: String,
-                #[serde(default)]
-                color: Option<ColorArg>,
-                #[serde(default)]
-                linetype: Option<String>,
-                #[serde(default)]
-                lineweight: Option<f64>,
-                #[serde(default)]
-                transparency: Option<u8>,
-            }
-            let a: Args = parse_args(args)?;
-            doc.ensure_layer(&a.layer);
-            let color = a.color.map(ColorArg::resolve);
-            let pts: Vec<Point> = a.points.iter().map(|p| Point::new(p[0], p[1])).collect();
-            let id = doc.add_polyline(pts, a.closed, &a.layer, color);
-            if let Some(ent) = doc.entity_mut(id) {
-                ent.linetype = a.linetype;
-                ent.lineweight = a.lineweight;
-                ent.transparency = a.transparency.unwrap_or(0);
-            }
-            let ent = doc.entity(id).expect("entity was just added");
-            serde_json::to_string(&ent.to_json(doc)).map_err(|e| e.to_string())
-        }
-
         "remove" => {
             #[derive(Deserialize)]
             struct Args {
@@ -572,13 +540,6 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             .to_string())
         }
 
-        "clear" => {
-            doc.checkpoint();
-            doc.entities.clear();
-            doc.layers.clear();
-            Ok(r#"{"ok":true}"#.to_string())
-        }
-
         "checkpoint" => {
             doc.checkpoint();
             Ok(serde_json::json!({ "undoDepth": doc.undo_depth() }).to_string())
@@ -592,218 +553,6 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
         "redo" => {
             let ok = doc.redo();
             Ok(serde_json::json!({ "ok": ok, "entities": doc.entities.len() }).to_string())
-        }
-
-        "addText" => {
-            #[derive(Deserialize)]
-            struct Args {
-                text: String,
-                at: [f64; 2],
-                #[serde(default = "default_text_height")]
-                height: f64,
-                #[serde(default = "default_layer")]
-                layer: String,
-                #[serde(default)]
-                color: Option<ColorArg>,
-            }
-            let a: Args = parse_args(args)?;
-            doc.ensure_layer(&a.layer);
-            let color = a.color.map(ColorArg::resolve);
-
-            let id = doc.alloc_id();
-            doc.entities.push(DrawEntity {
-                id,
-                layer: a.layer.clone(),
-                color,
-                linetype: None,
-                lineweight: None,
-                transparency: 0,
-                shape: Shape::Text {
-                    text: a.text.clone(),
-                    position: kurbo::Point::new(a.at[0], a.at[1]),
-                    height: a.height,
-                    rotation: 0.0,
-                },
-            });
-
-            let width = text::text_width(&a.text, a.height);
-            Ok(serde_json::json!({
-                "id": format!("e_{}", id.0),
-                "width": width,
-                "height": a.height,
-                "at": a.at,
-            })
-            .to_string())
-        }
-
-        "measure" => {
-            // Dimension line between two points: extension lines, arrows, measurement text
-            #[derive(Deserialize)]
-            struct Args {
-                from: [f64; 2],
-                to: [f64; 2],
-                #[serde(default = "default_measure_offset")]
-                offset: f64, // perpendicular offset for the dimension line
-                #[serde(default = "default_text_height")]
-                text_height: f64,
-                #[serde(default = "default_layer")]
-                layer: String,
-                #[serde(default)]
-                color: Option<ColorArg>,
-            }
-            let a: Args = parse_args(args)?;
-            doc.ensure_layer(&a.layer);
-            let color = a.color.map(ColorArg::resolve);
-
-            let from = Point::new(a.from[0], a.from[1]);
-            let to = Point::new(a.to[0], a.to[1]);
-            let dist = geo::distance(from, to);
-            let (nx, ny) = geo::normal(from, to);
-            let offset = a.offset;
-            let arrow_size = a.text_height * 0.8;
-
-            // Dimension line endpoints (offset from the measured points)
-            let d0 = Point::new(from.x + nx * offset, from.y + ny * offset);
-            let d1 = Point::new(to.x + nx * offset, to.y + ny * offset);
-
-            // Direction along the dimension line
-            let dir_x = (d1.x - d0.x) / dist;
-            let dir_y = (d1.y - d0.y) / dist;
-
-            let mut ids = Vec::new();
-
-            // Extension lines (stilts): from measured point to dimension line, with small gap
-            let gap = a.text_height * 0.3;
-            let ext_start_offset = if offset > 0.0 { gap } else { -gap };
-            let ext_end_overshoot = if offset > 0.0 { gap * 0.5 } else { -gap * 0.5 };
-            ids.push(doc.add_line(
-                Point::new(
-                    from.x + nx * ext_start_offset,
-                    from.y + ny * ext_start_offset,
-                ),
-                Point::new(d0.x + nx * ext_end_overshoot, d0.y + ny * ext_end_overshoot),
-                &a.layer,
-                color,
-            ));
-            ids.push(doc.add_line(
-                Point::new(to.x + nx * ext_start_offset, to.y + ny * ext_start_offset),
-                Point::new(d1.x + nx * ext_end_overshoot, d1.y + ny * ext_end_overshoot),
-                &a.layer,
-                color,
-            ));
-
-            // Dimension line (from d0 to d1)
-            ids.push(doc.add_line(d0, d1, &a.layer, color));
-
-            // Arrowheads (small triangles at each end)
-            // Arrow at d0, pointing toward d1
-            let a0_tip = d0;
-            let a0_back = Point::new(d0.x + dir_x * arrow_size, d0.y + dir_y * arrow_size);
-            let a0_left = Point::new(
-                a0_back.x + nx * arrow_size * 0.3,
-                a0_back.y + ny * arrow_size * 0.3,
-            );
-            let a0_right = Point::new(
-                a0_back.x - nx * arrow_size * 0.3,
-                a0_back.y - ny * arrow_size * 0.3,
-            );
-            ids.push(doc.add_line(a0_tip, a0_left, &a.layer, color));
-            ids.push(doc.add_line(a0_tip, a0_right, &a.layer, color));
-
-            // Arrow at d1, pointing toward d0
-            let a1_tip = d1;
-            let a1_back = Point::new(d1.x - dir_x * arrow_size, d1.y - dir_y * arrow_size);
-            let a1_left = Point::new(
-                a1_back.x + nx * arrow_size * 0.3,
-                a1_back.y + ny * arrow_size * 0.3,
-            );
-            let a1_right = Point::new(
-                a1_back.x - nx * arrow_size * 0.3,
-                a1_back.y - ny * arrow_size * 0.3,
-            );
-            ids.push(doc.add_line(a1_tip, a1_left, &a.layer, color));
-            ids.push(doc.add_line(a1_tip, a1_right, &a.layer, color));
-
-            // Measurement text centered on the dimension line, rotated to follow it
-            let label = format!("{:.1}", dist);
-            let text_w = text::text_width(&label, a.text_height);
-            let mid = geo::midpoint(d0, d1);
-            // Text rotation = angle of the dimension line
-            let text_rot = dir_y.atan2(dir_x);
-            // Anchor: centered along the line, offset perpendicular
-            let text_x = mid.x - (text_w / 2.0) * dir_x + nx * a.text_height * 0.3;
-            let text_y = mid.y - (text_w / 2.0) * dir_y + ny * a.text_height * 0.3;
-
-            let glyph_paths =
-                text::text_to_paths_rotated(&label, text_x, text_y, a.text_height, text_rot);
-            for id in add_glyph_paths(doc, &glyph_paths, &a.layer, color) {
-                ids.push(id);
-            }
-
-            Ok(serde_json::json!({
-                "distance": dist,
-                "ids": ids.iter().map(|id| format!("e_{}", id.0)).collect::<Vec<_>>(),
-            })
-            .to_string())
-        }
-
-        "addHatch" => {
-            #[derive(Deserialize)]
-            struct Args {
-                boundary: Vec<[f64; 2]>,
-                #[serde(default = "default_hatch_angle")]
-                angle: f64, // degrees
-                #[serde(default = "default_hatch_spacing")]
-                spacing: f64, // distance between lines
-                #[serde(default = "default_layer")]
-                layer: String,
-                #[serde(default)]
-                color: Option<ColorArg>,
-            }
-            let a: Args = parse_args(args)?;
-            doc.ensure_layer(&a.layer);
-            let color = a.color.map(ColorArg::resolve);
-            let boundary: Vec<Point> = a.boundary.iter().map(|p| Point::new(p[0], p[1])).collect();
-            if boundary.len() < 3 {
-                return Err("hatch boundary needs at least 3 points".to_string());
-            }
-
-            let ang_rad = a.angle.to_radians();
-            let cos_a = ang_rad.cos();
-            let sin_a = ang_rad.sin();
-
-            // Project boundary onto the hatch direction perpendicular
-            // to find the range of parallel lines needed
-            let perp_dists: Vec<f64> = boundary
-                .iter()
-                .map(|p| -p.x * sin_a + p.y * cos_a)
-                .collect();
-            let min_d = perp_dists.iter().cloned().fold(f64::MAX, f64::min);
-            let max_d = perp_dists.iter().cloned().fold(f64::MIN, f64::max);
-
-            // Bounding box for line length
-            let (bx0, by0, bx1, by1) = geo::bounds_of(&boundary);
-            let diag = ((bx1 - bx0).powi(2) + (by1 - by0).powi(2)).sqrt();
-
-            let mut ids = Vec::new();
-            let mut d = min_d + a.spacing;
-            while d < max_d {
-                // Base point at perpendicular distance d from origin
-                // Normal to hatch direction: (-sin_a, cos_a)
-                let base = Point::new(-d * sin_a, d * cos_a);
-                let dir = Point::new(cos_a, sin_a);
-                let p0 = Point::new(base.x - diag * dir.x, base.y - diag * dir.y);
-                let p1 = Point::new(base.x + diag * dir.x, base.y + diag * dir.y);
-
-                // Clip this line to the boundary polygon
-                let clipped = clip_line_to_polygon(p0, p1, &boundary);
-                for (ca, cb) in clipped {
-                    let id = doc.add_line(ca, cb, &a.layer, color);
-                    ids.push(format!("e_{}", id.0));
-                }
-                d += a.spacing;
-            }
-            Ok(serde_json::json!({ "lines": ids.len(), "ids": ids }).to_string())
         }
 
         "offset" => {
@@ -859,91 +608,6 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 }
                 None => Err(format!("cannot offset entity {}", a.id)),
             }
-        }
-
-        "defineBlock" => {
-            #[derive(Deserialize)]
-            struct ShapeDef {
-                #[serde(rename = "type")]
-                shape_type: String,
-                #[serde(default)]
-                start: Option<[f64; 2]>,
-                #[serde(default)]
-                end: Option<[f64; 2]>,
-                #[serde(default)]
-                center: Option<[f64; 2]>,
-                #[serde(default)]
-                radius: Option<f64>,
-                #[serde(default)]
-                from: Option<f64>,
-                #[serde(default)]
-                to: Option<f64>,
-                #[serde(default)]
-                points: Option<Vec<[f64; 2]>>,
-                #[serde(default)]
-                closed: Option<bool>,
-                #[serde(default)]
-                layer: Option<String>,
-                #[serde(default)]
-                color: Option<ColorArg>,
-            }
-            #[derive(Deserialize)]
-            struct Args {
-                name: String,
-                shapes: Vec<ShapeDef>,
-                #[serde(default)]
-                insert_point: Option<[f64; 2]>,
-                #[serde(default = "default_layer")]
-                default_layer: String,
-            }
-            let a: Args = parse_args(args)?;
-            let mut shapes = Vec::new();
-            for sd in &a.shapes {
-                let color = sd.color.clone().map(ColorArg::resolve);
-                let layer = sd.layer.clone().unwrap_or_default();
-                let shape = match sd.shape_type.as_str() {
-                    "line" => {
-                        let s = sd.start.ok_or("line needs start")?;
-                        let e = sd.end.ok_or("line needs end")?;
-                        Shape::Line(Line::new(Point::new(s[0], s[1]), Point::new(e[0], e[1])))
-                    }
-                    "circle" => {
-                        let c = sd.center.ok_or("circle needs center")?;
-                        let r = sd.radius.ok_or("circle needs radius")?;
-                        Shape::Circle(Circle::new(Point::new(c[0], c[1]), r))
-                    }
-                    "arc" => {
-                        let c = sd.center.ok_or("arc needs center")?;
-                        let r = sd.radius.ok_or("arc needs radius")?;
-                        let from = sd.from.unwrap_or(0.0).to_radians();
-                        let to = sd.to.unwrap_or(360.0).to_radians();
-                        Shape::Arc {
-                            center: Point::new(c[0], c[1]),
-                            radius: r,
-                            start_angle: from,
-                            end_angle: to,
-                        }
-                    }
-                    "polyline" => {
-                        let pts = sd.points.as_ref().ok_or("polyline needs points")?;
-                        let pts: Vec<Point> = pts.iter().map(|p| Point::new(p[0], p[1])).collect();
-                        Shape::Polyline {
-                            points: pts,
-                            closed: sd.closed.unwrap_or(false),
-                        }
-                    }
-                    other => return Err(format!("unknown shape type in block: {other}")),
-                };
-                shapes.push((shape, layer, color));
-            }
-            let ip = a.insert_point.unwrap_or([0.0, 0.0]);
-            doc.define_block(BlockDef {
-                name: a.name.clone(),
-                shapes,
-                insert_point: Point::new(ip[0], ip[1]),
-                default_layer: a.default_layer,
-            });
-            Ok(serde_json::json!({ "defined": a.name }).to_string())
         }
 
         // Load a DWG file and register all its entities as a named block definition.
@@ -1136,38 +800,6 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
                 "shapeCount": shape_count,
             })
             .to_string())
-        }
-
-        "place" => {
-            #[derive(Deserialize)]
-            struct Args {
-                block: String,
-                at: [f64; 2],
-                #[serde(default)]
-                rotation: f64,
-                #[serde(default)]
-                layer: Option<String>,
-                #[serde(default = "default_one")]
-                scale: f64,
-            }
-            fn default_one() -> f64 {
-                1.0
-            }
-            let a: Args = parse_args(args)?;
-            let ids = doc.place_block_scaled(
-                &a.block,
-                Point::new(a.at[0], a.at[1]),
-                a.rotation,
-                a.scale,
-                a.scale,
-                a.layer.as_deref(),
-            );
-            if ids.is_empty() {
-                return Err(format!("block '{}' not defined", a.block));
-            }
-            // First ID is the block_insert entity, return it directly
-            let insert_ent = doc.entity(ids[0]).expect("entity was just added");
-            serde_json::to_string(&insert_ent.to_json(doc)).map_err(|e| e.to_string())
         }
 
         "connectedTo" => {
@@ -1368,54 +1000,16 @@ pub fn cad_call(doc: &mut Document, method: &str, args: &str) -> Result<String, 
             serde_json::to_string(&colors).map_err(|e| e.to_string())
         }
 
-        "methods" => {
-            let methods = serde_json::json!([
-                {"name": "describe", "args": "{}", "desc": "Scene summary: bounds, entity counts, layers"},
-                {"name": "entities", "args": "{expand?, layer?}", "desc": "List all entities. expand=true flattens block inserts"},
-                {"name": "entity", "args": "{id}", "desc": "Get one entity by ID"},
-                {"name": "children", "args": "{id}", "desc": "Expanded child shapes of a block insert"},
-                {"name": "addLine", "args": "{start, end, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add line"},
-                {"name": "addCircle", "args": "{center, radius, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add circle"},
-                {"name": "addArc", "args": "{center, radius, from?, to?, p1?, p2?, shortest?, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add arc (degrees or point-based)"},
-                {"name": "addPolyline", "args": "{points, closed?, layer?, color?, linetype?, lineweight?, transparency?}", "desc": "Add polyline"},
-                {"name": "addText", "args": "{text, at, height?, layer?, color?}", "desc": "Add single-line text"},
-                {"name": "addLayer", "args": "{name, color?, linetype?, lineweight?}", "desc": "Create/update layer"},
-                {"name": "addLinetype", "args": "{name, pattern, description?}", "desc": "Define named linetype. pattern=[dash,gap,...] in drawing units"},
-                {"name": "linetypes", "args": "{}", "desc": "List all defined linetypes"},
-                {"name": "aciColors", "args": "{}", "desc": "ACI palette: 255 entries of {index, color: [r,g,b]}"},
-                {"name": "measure", "args": "{from, to, offset?, layer?}", "desc": "Add dimension line between two points"},
-                {"name": "addHatch", "args": "{boundary, angle?, spacing?, layer?}", "desc": "Add line-pattern hatch fill"},
-                {"name": "defineBlock", "args": "{name, shapes, insert_point?}", "desc": "Define reusable block from shape list"},
-                {"name": "place", "args": "{block, at?, rotation?, xScale?, yScale?, layer?}", "desc": "Place block instance"},
-                {"name": "clone", "args": "{source, name, replaceText?}", "desc": "Clone block def with text substitution"},
-                {"name": "remove", "args": "{target}", "desc": "Delete entities by ID(s)"},
-                {"name": "move", "args": "{target, dx, dy}", "desc": "Translate entities"},
-                {"name": "copy", "args": "{target, dx, dy}", "desc": "Duplicate entities with offset"},
-                {"name": "rotate", "args": "{target, center, angle}", "desc": "Rotate entities (degrees)"},
-                {"name": "mirror", "args": "{target, p1, p2}", "desc": "Mirror entities across a line"},
-                {"name": "offset", "args": "{id, distance}", "desc": "Parallel offset (lines, arcs, circles, polylines)"},
-                {"name": "trim", "args": "{id, cut, keep}", "desc": "Trim entity at point. keep='start'|'end'"},
-                {"name": "fillet", "args": "{id1, id2, radius}", "desc": "Fillet two lines/arcs with radius"},
-                {"name": "projectOntoCircle", "args": "{point, center, radius}", "desc": "Nearest point on circle"},
-                {"name": "projectOnto", "args": "{point, line}", "desc": "Perpendicular projection onto line"},
-                {"name": "angleOf", "args": "{point, center}", "desc": "Angle in degrees from center to point"},
-                {"name": "checkpoint", "args": "{}", "desc": "Save undo snapshot"},
-                {"name": "undo", "args": "{}", "desc": "Undo last checkpoint"},
-                {"name": "redo", "args": "{}", "desc": "Redo last undo"},
-                {"name": "methods", "args": "{}", "desc": "List all available cad_call methods"},
-            ]);
-            serde_json::to_string(&methods).map_err(|e| e.to_string())
-        }
-
-        _ => Err(format!("unknown method: {method}")),
+        _ => crate::dispatch_ext::cad_call_ext(doc, method, args)
+            .unwrap_or_else(|| Err(format!("unknown method: {method}"))),
     }
 }
 
-fn parse_args<T: serde::de::DeserializeOwned>(args: &str) -> Result<T, String> {
+pub(crate) fn parse_args<T: serde::de::DeserializeOwned>(args: &str) -> Result<T, String> {
     serde_json::from_str(args).map_err(|e| format!("bad args: {e}"))
 }
 
-fn parse_entity_id(s: &str) -> Result<EntityId, String> {
+pub(crate) fn parse_entity_id(s: &str) -> Result<EntityId, String> {
     let num = s.strip_prefix("e_").unwrap_or(s);
     num.parse::<u64>()
         .map(EntityId)
@@ -1424,7 +1018,7 @@ fn parse_entity_id(s: &str) -> Result<EntityId, String> {
 
 /// Parse a target that can be a single ID string, array of ID strings,
 /// or array of entity objects (with .id field).
-fn parse_target(val: &serde_json::Value) -> Result<Vec<EntityId>, String> {
+pub(crate) fn parse_target(val: &serde_json::Value) -> Result<Vec<EntityId>, String> {
     match val {
         serde_json::Value::String(s) => Ok(vec![parse_entity_id(s)?]),
         serde_json::Value::Array(arr) => arr
@@ -1445,45 +1039,6 @@ fn parse_target(val: &serde_json::Value) -> Result<Vec<EntityId>, String> {
     }
 }
 
-/// Store glyph BezPaths as CurvePath entities (abstract, not flattened).
-pub(crate) fn add_glyph_paths(
-    doc: &mut Document,
-    glyph_paths: &[BezPath],
-    layer: &str,
-    color: Option<Color>,
-) -> Vec<EntityId> {
-    let mut ids = Vec::new();
-    for path in glyph_paths {
-        if path.elements().is_empty() {
-            continue;
-        }
-        // Split multi-contour BezPaths into individual subpaths.
-        // Glyphs like "A" have outer + inner contours; each needs
-        // its own entity so the renderer draws all of them.
-        for subpath in split_subpaths(path) {
-            if subpath.elements().is_empty() {
-                continue;
-            }
-            let closed = matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
-            let id = doc.alloc_id();
-            doc.entities.push(DrawEntity {
-                id,
-                layer: layer.to_string(),
-                color,
-                linetype: None,
-                lineweight: None,
-                transparency: 0,
-                shape: Shape::CurvePath {
-                    path: subpath,
-                    closed,
-                },
-            });
-            ids.push(id);
-        }
-    }
-    ids
-}
-
 /// Split a BezPath with multiple MoveTo's into separate subpaths.
 pub fn split_subpaths(path: &BezPath) -> Vec<BezPath> {
     let mut subpaths = Vec::new();
@@ -1500,7 +1055,7 @@ pub fn split_subpaths(path: &BezPath) -> Vec<BezPath> {
     subpaths
 }
 
-fn default_layer() -> String {
+pub(crate) fn default_layer() -> String {
     "0".to_string()
 }
 fn default_arc_to() -> f64 {
@@ -1508,16 +1063,4 @@ fn default_arc_to() -> f64 {
 }
 fn default_tolerance() -> f64 {
     0.01
-}
-fn default_hatch_angle() -> f64 {
-    45.0
-}
-fn default_hatch_spacing() -> f64 {
-    5.0
-}
-fn default_text_height() -> f64 {
-    5.0
-}
-fn default_measure_offset() -> f64 {
-    10.0
 }

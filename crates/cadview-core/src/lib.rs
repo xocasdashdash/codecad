@@ -7,7 +7,10 @@
 //! - JSON serialization for the JS sandbox ABI
 //! - Geometry helper functions (distance, projection, polygon tests)
 
+pub mod annotate;
+pub mod construct;
 pub mod dispatch;
+pub mod dispatch_ext;
 pub mod document;
 pub mod dwg;
 pub mod hatch;
@@ -17,6 +20,8 @@ pub mod types;
 pub mod elmt;
 pub mod geo;
 pub mod pdf;
+pub mod region;
+pub mod spline;
 pub mod sync;
 pub mod text;
 

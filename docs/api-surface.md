@@ -490,6 +490,84 @@ cad.setColor(target, [r, g, b])
 Returns: for single target, the updated entity. For array target, array
 of updated entities.
 
+### Construction operations (implemented)
+
+These are real `cad_call` methods (see `cad.methods()`), implemented in
+`cadview-core` (`construct.rs`, `annotate.rs`, `region.rs`, `spline.rs`)
+and exposed through `web/src/cad-api.ts`. Entity arguments accept an ID
+string or an entity object. Operations that modify an entity keep its ID.
+
+```js
+// Intersections and tangents (pure, no entities created)
+cad.lineLineIntersection(l1, l2, { segments })   // l = [[x,y],[x,y]] | line id -> [x,y] | null
+cad.tangentLines(c1, r1, c2, r2, "outer")        // or "inner" -> [[p1, p2], ...] (0-2 lines)
+cad.tangentFromPoint(p, c, r)                    // -> tangent points on the circle (0-2)
+
+// Fillet / chamfer: trims or extends both inputs, keeps their IDs
+cad.fillet(a, b, r, { pick: [pa, pb], layer })   // lines, arcs, circles -> {arc, a, b}
+cad.chamfer(a, b, d1, d2, { pick })              // two lines -> {line, a, b}
+
+// Trim / extend against boundary entities (lines, arcs, circles, polylines)
+cad.trimTo(id, boundary, keepPoint)              // keeps the piece containing keepPoint
+cad.extendTo(id, boundary, { end: "start" | "end" | "nearest" })
+
+// Arrays (counts include the original; returns the new copies)
+cad.array(target, { polar: { center, count, angle: 360, rotate: true } })
+cad.array(target, { rect: { rows, cols, dx, dy } })
+
+cad.clear({ all: true })                         // also clears blocks, resets linetypes
+```
+
+**Fillet rules.** The fillet arc is a real `arc` entity tangent to both
+inputs. `pick` gives a point on the part of each entity that should
+survive (like clicking in AutoCAD); without picks, each entity keeps the
+end farther from the other one, which is right for ordinary corners.
+Radius 0 trims/extends both to a sharp corner (`arc: null`). Circles are
+never trimmed. Errors: `cannot fillet parallel lines`, `no fillet
+solution: radius too large for these entities`.
+
+**Annotation.**
+
+```js
+cad.addText("A1", at, { height, rotation /*deg*/, align: "center", valign: "middle" })
+cad.measure(p1, p2, { offset, dir: "h" | "v" | "aligned", label: "<> mm",
+                      decimals, text_height, arrow, shift, layer })
+cad.dimRadius(circleOrArc, { angle, label: "R<>" })      // or {center, radius}
+cad.dimDiameter(circle, { angle, label: "Ø<>" })
+cad.dimAngle(vertex, p1, p2, { radius, label: "<>°" })   // CCW from p1 to p2
+```
+
+Dimensions are plain entities on the given layer: lines (an arc for
+`dimAngle`), filled arrowheads (`solid_fill`, written to DWG as SOLID)
+and one real TEXT entity holding the label (returned as `text`). The
+result is `{value, label, ids, text}`. `measure` offset is the signed
+distance of the dimension line from the outermost measured point
+(positive = left of the dimension direction, e.g. above for `dir: "h"`).
+Text alignment is resolved at creation: the stored TEXT is left/baseline
+anchored at the computed position.
+
+**Fills, hatches, curves, regions.**
+
+```js
+// Rings: [[x,y],...] | {center, radius} | circle / closed polyline id
+cad.addFill(boundary, { holes: [ring, ...], color })     // SOLID fill, arcs stay exact
+cad.addHatch(boundary, { holes, angle, spacing, pattern: "lines" | "cross" | "solid" })
+cad.addSpline(points, { fit: true, degree: 3, closed })  // fit=false: control points
+cad.addPolyline([[0,0,0.5], [10,0], [10,10]], { closed }) // [x, y, bulge]
+cad.regionClip(subject, clip, "subtract")  // intersect|union|subtract|xor -> [{outer, holes, area}]
+```
+
+Hatch lines are anchored at multiples of `spacing` so neighbouring
+hatches line up, and holes use an even-odd scanline with half-open
+crossing rules (lines through vertices are no longer dropped).
+`regionClip` uses the `i_overlay` crate; it is polygonal (circles are
+sampled), so use it to compute boundaries, then draw them with
+`addPolyline` / `addFill` / `addHatch`.
+
+**Blocks.** `defineBlock` shapes accept `{type: "text", text, at, height,
+rotation, align, valign}` and polylines with bulge vertices. `place`
+takes `scale` as a number or `[sx, sy]` (or `xScale` / `yScale`).
+
 ### Undo
 
 ```js

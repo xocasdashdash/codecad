@@ -303,7 +303,7 @@ pub fn tessellate_lwpolyline(vertices: &[LwVertex], closed: bool, tolerance: f64
                 pts.push(p1);
                 continue;
             }
-            let radius = chord / (2.0 * included.sin().abs());
+            let radius = chord / (2.0 * (included / 2.0).sin().abs());
             let sagitta = bulge * chord / 2.0;
             let mx = (p0.x + p1.x) / 2.0;
             let my = (p0.y + p1.y) / 2.0;

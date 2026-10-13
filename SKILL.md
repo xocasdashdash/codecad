@@ -158,6 +158,10 @@ cad.projectOnto([px,py], [[lx1,ly1],[lx2,ly2]])   // -> [x, y]
 cad.projectOntoCircle([px,py], [cx,cy], r)         // -> [x, y]
 cad.lineCircleIntersection([[lx1,ly1],[lx2,ly2]], [cx,cy], r)  // -> [[x,y], ...]
 cad.circleCircleIntersection([c1x,c1y], r1, [c2x,c2y], r2)    // -> [[x,y], ...]
+cad.lineLineIntersection(l1, l2, { segments })   // l = [[x,y],[x,y]] or line id -> [x,y] | null
+cad.tangentLines(c1, r1, c2, r2, "outer")        // "inner" for crossing -> [[p1, p2], ...]
+cad.tangentFromPoint(p, c, r)                    // -> tangent points on the circle
+cad.regionClip(a, b, "subtract")                 // polygon boolean -> [{outer, holes, area}]
 ```
 
 All return bare numbers or arrays, no wrapped objects.
@@ -173,18 +177,41 @@ cad.copy(target, dx, dy)                     // duplicate + offset
 cad.rotate(target, center, degrees)          // rotate around point
 cad.mirror(target, p1, p2)                   // mirror across line
 cad.trim(id, cutPoint, keep)                 // shorten line/arc ("start"/"end")
+cad.trimTo(id, boundary, keepPoint)          // cut at boundary entities, keep one piece
+cad.extendTo(id, boundary)                   // grow line/arc until it hits boundary
+cad.fillet(a, b, r, { pick })                // tangent arc + trim/extend both -> {arc, a, b}
+cad.chamfer(a, b, d1, d2)                    // bevel two lines -> {line, a, b}
+cad.array(target, { polar: { center, count } })        // or { rect: { rows, cols, dx, dy } }
 cad.offset(entity, distance)                 // parallel copy (line/circle/arc)
-cad.clear()                                  // remove everything
+cad.clear()                                  // remove entities + layers
+cad.clear({ all: true })                     // ...and blocks; linetypes reset
 ```
+
+Trim/extend/fillet/chamfer keep the IDs of the entities they modify.
 
 ### Dimensioning
 
 ```js
-cad.measure([x1,y1], [x2,y2], { offset, text_height, layer })
+cad.measure(p1, p2, { offset, dir: "h"|"v"|"aligned", label: "<> mm", decimals, text_height, layer })
+cad.dimRadius(arcOrCircle, { angle, label: "R<>" })
+cad.dimDiameter(circle, { angle, label: "Ø<>" })
+cad.dimAngle(vertex, p1, p2, { radius })             // CCW from p1 to p2
+cad.addText("NOTE", at, { height, rotation, align: "center", valign: "middle" })
 ```
 
-Draws extension lines, arrows, and measurement text. Returns
-`{distance, ids}`.
+Dimensions are extension/dimension lines, filled arrowheads and one real
+TEXT entity. They return `{value, label, ids, text}`; `"<>"` in `label`
+is replaced by the measured value. Remove a dimension with
+`cad.remove(result.ids)`.
+
+### Fills, hatches, curves
+
+```js
+cad.addFill(boundary, { holes: [{center, radius}, circleId, points...] })  // solid
+cad.addHatch(boundary, { holes, angle: 45, spacing: 3, pattern: "lines" | "cross" })
+cad.addSpline(points, { fit: true })                 // smooth curve through points
+cad.addPolyline([[0,0,0.5], [10,0]], { closed })     // [x, y, bulge] -> arc segment
+```
 
 ### Persistence
 
@@ -258,6 +285,54 @@ The universal CAD sequence:
   each junction point between both entities that meet there.
 - **Round**: add fillets at corners (offset, intersect, arc, trim).
 - **Clean up**: remove construction geometry.
+
+### Intersect, fillet, trim (instead of hand math)
+
+The construction calls do the corner math for you. Don't compute
+tangent points, fillet centres or trim points by hand:
+
+```js
+// Rough out the profile with overshooting lines, then let the engine
+// find corners. Draw long; trim later.
+const base = cad.addLine([-10, 0], [130, 0], { layer: "OUT" });
+const side = cad.addLine([120, -10], [120, 70], { layer: "OUT" });
+const left = cad.addLine([0, -10], [0, 70], { layer: "OUT" });
+
+// Sharp corner: radius 0 trims/extends both lines to their intersection.
+cad.fillet(base, left, 0);
+// Rounded corner: a true tangent arc; both lines are trimmed, IDs kept.
+const { arc } = cad.fillet(base, side, 12);
+cad.dimRadius(arc, { label: "R<>", layer: "DIM" });
+
+// Which side survives? Pass a point on the part to keep (like clicking).
+cad.fillet(lineA, lineB, 5, { pick: [[40, 0], [0, 30]] });
+
+// Cut a line back to whatever it crosses; keep the piece you point at.
+cad.trimTo(slot, [wall1, holeCircle], [55, 20]);
+// Grow a line until it meets a boundary.
+cad.extendTo(rib, outerWall);
+
+// Corner point of two (possibly not-touching) lines, no entities created.
+const corner = cad.lineLineIntersection(base, side);
+
+// Belt / tangent profiles between two circles.
+const [[p1, p2], [q1, q2]] = cad.tangentLines(c1, 30, c2, 15, "outer");
+
+// Bolt circles: draw one hole, array it.
+cad.array(hole, { polar: { center: [0, 0], count: 6 } });
+```
+
+Rules of thumb:
+
+- **Draw long, then trim.** Construction lines that overshoot are
+  cheap; `fillet`, `trimTo` and `extendTo` clean up the ends exactly.
+- **Fillet before dimensioning.** The returned `arc` is a real entity:
+  feed it straight to `dimRadius`.
+- **Errors are answers.** `cannot fillet parallel lines` and
+  `radius too large` mean the geometry has no solution: check the picks
+  or the radius instead of nudging coordinates.
+- **Use `regionClip` for areas.** Subtract holes or cut regions, then
+  hand `outer`/`holes` to `addFill`, `addHatch` or `addPolyline`.
 
 ### Build incrementally
 
@@ -390,6 +465,11 @@ Fillets require careful reasoning about which side the arc sits on.
 The validation pattern is always the same: compute the arc midpoint,
 check which side of the parent surface it's on. If wrong, swap the
 arc's from/to angles.
+
+**Prefer `cad.fillet(a, b, r)`** for line-line, line-arc and arc-arc
+fillets: it finds the centre, trims/extends both entities and adds a
+real arc. The manual procedure below is still useful for unusual cases
+(e.g. fillets between a line and a spline you sampled yourself).
 
 **Complete fillet workflow (trim + arc):**
 
@@ -579,5 +659,10 @@ y_ = x * Math.sin(2*th) - y * Math.cos(2*th)
 
 ## Known API gaps
 
+- **Dimensions are loose entities**, not DWG DIMENSION objects; they
+  roundtrip as lines + SOLIDs + TEXT.
+- **Text alignment is resolved at creation**: TEXT is stored left/baseline
+  anchored (computed with the embedded Roboto Mono metrics), so centred
+  text may shift slightly in AutoCAD with a different font.
 - **Entity snap**: snap placement to existing entity endpoints/midpoints
 - **Spatial index** (rstar) for fast query_near, query_bounds on large drawings

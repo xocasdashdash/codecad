@@ -341,7 +341,7 @@ impl Shape {
                 Shape::BlockInsert {
                     block_name: block_name.clone(),
                     position: new_pos,
-                    rotation: *rotation,
+                    rotation: rotation + xform_rotation(xform),
                     x_scale: *x_scale,
                     y_scale: *y_scale,
                 }
@@ -358,7 +358,7 @@ impl Shape {
                     text: text.clone(),
                     position: xform * *position,
                     height: height * sx,
-                    rotation: *rotation,
+                    rotation: rotation + xform_rotation(xform),
                 }
             }
             Shape::MText {
@@ -375,7 +375,7 @@ impl Shape {
                     plain_text: plain_text.clone(),
                     position: xform * *position,
                     height: height * sx,
-                    rotation: *rotation,
+                    rotation: rotation + xform_rotation(xform),
                 }
             }
         }
@@ -729,7 +729,7 @@ pub(crate) fn lwpolyline_bulge_arc_to_path(path: &mut BezPath, p0: Point, p1: Po
         path.line_to(p1);
         return;
     }
-    let radius = (chord / (2.0 * included.sin().abs())).abs();
+    let radius = (chord / (2.0 * (included / 2.0).sin().abs())).abs();
     let sagitta = bulge * chord / 2.0;
     let mx = (p0.x + p1.x) / 2.0;
     let my = (p0.y + p1.y) / 2.0;
@@ -960,4 +960,98 @@ pub(crate) fn fill_edges_bbox(
         }
     }
     (min_x, min_y, max_x, max_y)
+}
+
+/// Rotation angle (radians) contributed by an affine transform, for
+/// entities that carry their own orientation (text, block inserts).
+/// Pure rotations/translations return the rotation angle; reflections
+/// return 0 so mirrored text stays readable (AutoCAD MIRRTEXT=0).
+fn xform_rotation(xform: kurbo::Affine) -> f64 {
+    let c = xform.as_coeffs();
+    let det = c[0] * c[3] - c[1] * c[2];
+    if det > 0.0 {
+        c[1].atan2(c[0])
+    } else {
+        0.0
+    }
+}
+
+#[cfg(test)]
+mod xform_rotation_tests {
+    use super::*;
+
+    #[test]
+    fn rotating_text_updates_its_rotation() {
+        let t = Shape::Text {
+            text: "A".into(),
+            position: Point::new(10.0, 0.0),
+            height: 2.5,
+            rotation: 0.0,
+        };
+        let r = t.transformed(Affine::rotate(PI / 2.0));
+        match r {
+            Shape::Text {
+                position, rotation, ..
+            } => {
+                assert!((position.x).abs() < 1e-9 && (position.y - 10.0).abs() < 1e-9);
+                assert!((rotation - PI / 2.0).abs() < 1e-9);
+            }
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn translating_or_mirroring_text_keeps_rotation() {
+        let t = Shape::Text {
+            text: "A".into(),
+            position: Point::new(0.0, 0.0),
+            height: 2.5,
+            rotation: 0.3,
+        };
+        for xf in [Affine::translate((5.0, 5.0)), Affine::FLIP_X] {
+            if let Shape::Text { rotation, .. } = t.transformed(xf) {
+                assert!((rotation - 0.3).abs() < 1e-9);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod bulge_tests {
+    use super::*;
+    use kurbo::Shape as _;
+
+    #[test]
+    fn semicircle_bulge_has_chord_half_radius() {
+        // bulge 1 = 180° CCW arc from (0,0) to (10,0): center (5,0), radius 5,
+        // passing through (5,-5).
+        let mut path = BezPath::new();
+        path.move_to(Point::new(0.0, 0.0));
+        lwpolyline_bulge_arc_to_path(&mut path, Point::new(0.0, 0.0), Point::new(10.0, 0.0), 1.0);
+        let bb = path.bounding_box();
+        assert!(
+            (bb.x0 - 0.0).abs() < 1e-6 && (bb.x1 - 10.0).abs() < 1e-6,
+            "{bb:?}"
+        );
+        assert!((bb.y0 + 5.0).abs() < 1e-3 && bb.y1.abs() < 1e-6, "{bb:?}");
+    }
+
+    #[test]
+    fn quarter_bulge_matches_construct_bulge_arc() {
+        let (p0, p1, b) = (
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            (PI / 8.0).tan(),
+        );
+        let (c, r, _, _) = crate::construct::bulge_arc(p0, p1, b).unwrap();
+        let mut path = BezPath::new();
+        path.move_to(p0);
+        lwpolyline_bulge_arc_to_path(&mut path, p0, p1, b);
+        // 90° arc: radius = chord / (2 sin 45°)
+        assert!((r - 10.0 / (2.0 * (PI / 4.0).sin())).abs() < 1e-9);
+        let bb = path.bounding_box();
+        // Sagitta = r - distance(center, chord midpoint)
+        let sag = r - (c - Point::new(5.0, 0.0)).hypot();
+        assert!((bb.y0 + sag).abs() < 1e-3, "{bb:?} sag {sag}");
+    }
 }

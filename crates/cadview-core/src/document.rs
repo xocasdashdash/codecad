@@ -57,6 +57,7 @@ pub fn block_from_bytes(data: &[u8]) -> Option<BlockDef> {
 struct Snapshot {
     layers: Vec<Layer>,
     entities: Vec<DrawEntity>,
+    blocks: HashMap<String, BlockDef>,
     linetypes: HashMap<String, LinetypeDef>,
     next_id: u64,
 }
@@ -73,7 +74,7 @@ pub struct Document {
 }
 
 /// Standard linetypes pre-populated in every new document.
-fn standard_linetypes() -> HashMap<String, LinetypeDef> {
+pub(crate) fn standard_linetypes() -> HashMap<String, LinetypeDef> {
     let mut m = HashMap::new();
     let add = |m: &mut HashMap<String, LinetypeDef>, name: &str, desc: &str, pat: Vec<f64>| {
         m.insert(
@@ -118,6 +119,7 @@ impl Document {
         self.undo_stack.push(Snapshot {
             layers: self.layers.clone(),
             entities: self.entities.clone(),
+            blocks: self.blocks.clone(),
             linetypes: self.linetypes.clone(),
             next_id: self.next_id,
         });
@@ -137,11 +139,13 @@ impl Document {
             self.redo_stack.push(Snapshot {
                 layers: self.layers.clone(),
                 entities: self.entities.clone(),
+                blocks: self.blocks.clone(),
                 linetypes: self.linetypes.clone(),
                 next_id: self.next_id,
             });
             self.layers = snap.layers;
             self.entities = snap.entities;
+            self.blocks = snap.blocks;
             self.linetypes = snap.linetypes;
             self.next_id = snap.next_id;
             true
@@ -155,11 +159,13 @@ impl Document {
             self.undo_stack.push(Snapshot {
                 layers: self.layers.clone(),
                 entities: self.entities.clone(),
+                blocks: self.blocks.clone(),
                 linetypes: self.linetypes.clone(),
                 next_id: self.next_id,
             });
             self.layers = snap.layers;
             self.entities = snap.entities;
+            self.blocks = snap.blocks;
             self.linetypes = snap.linetypes;
             self.next_id = snap.next_id;
             true
@@ -884,33 +890,38 @@ fn text_to_curve_entities(
     } else {
         crate::text::text_to_paths(text_str, position.x, position.y, height)
     };
-    let mut out = Vec::new();
+    // One entity per text string (all glyph contours in one BezPath).
+    // Both renderers draw every subpath of a CurvePath, and keeping the
+    // string together means screen-space LOD culls/fades it as a whole,
+    // so small glyphs (".", ":", ",") don't vanish while the rest of
+    // the label is still legible.
+    let mut combined = kurbo::BezPath::new();
+    let mut all_closed = true;
     for path in &paths {
-        if path.elements().is_empty() {
-            continue;
-        }
-        // Split multi-contour glyph paths into individual subpaths
         for subpath in crate::dispatch::split_subpaths(path) {
             if subpath.elements().is_empty() {
                 continue;
             }
-            let closed = matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
-            *next_id += 1;
-            out.push(DrawEntity {
-                id: EntityId(*next_id),
-                layer: layer.to_string(),
-                color,
-                linetype: None,
-                lineweight: None,
-                transparency: 0,
-                shape: Shape::CurvePath {
-                    path: subpath,
-                    closed,
-                },
-            });
+            all_closed &= matches!(subpath.elements().last(), Some(kurbo::PathEl::ClosePath));
+            combined.extend(subpath.elements().iter().copied());
         }
     }
-    out
+    if combined.elements().is_empty() {
+        return Vec::new();
+    }
+    *next_id += 1;
+    vec![DrawEntity {
+        id: EntityId(*next_id),
+        layer: layer.to_string(),
+        color,
+        linetype: None,
+        lineweight: None,
+        transparency: 0,
+        shape: Shape::CurvePath {
+            path: combined,
+            closed: all_closed,
+        },
+    }]
 }
 
 /// Expand a Document's entities for rendering. Returns a list of synthetic

@@ -231,51 +231,110 @@ pub fn generate_dwg_hatch_fill(
 }
 
 pub(crate) fn clip_line_to_polygon(p0: Point, p1: Point, polygon: &[Point]) -> Vec<(Point, Point)> {
-    let n = polygon.len();
-    if n < 3 {
-        return Vec::new();
-    }
+    clip_line_to_rings(p0, p1, std::slice::from_ref(&polygon.to_vec()))
+}
 
+/// Clip the infinite line through p0, p1 against a region made of one or
+/// more closed rings (outer boundary + holes, or several islands) using
+/// the even-odd rule. Returns the inside spans ordered along p0->p1.
+///
+/// Crossings are counted with a half-open rule (an edge crosses when its
+/// endpoints are strictly on opposite sides, with "on the line" treated as
+/// below). That makes a scanline through a vertex count 0 or 2 crossings
+/// for a touching corner and exactly 1 for a pass-through vertex, so no
+/// de-duplication of intersection points is needed. Merging nearby
+/// intersection parameters (the old approach) dropped one side of a pair
+/// and mis-paired every following span, which lost scanlines around holes
+/// and at corner-touching lines.
+pub fn clip_line_to_rings(p0: Point, p1: Point, rings: &[Vec<Point>]) -> Vec<(Point, Point)> {
     let dx = p1.x - p0.x;
     let dy = p1.y - p0.y;
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-24 {
+        return Vec::new();
+    }
+    let len = len2.sqrt();
+    // Unit normal of the scanline; side(q) = signed distance from the line.
+    let (nx, ny) = (-dy / len, dx / len);
+    let side = |q: Point| (q.x - p0.x) * nx + (q.y - p0.y) * ny;
 
-    // Find all intersection t-values of the infinite line with polygon edges
     let mut ts = Vec::new();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let ex = polygon[j].x - polygon[i].x;
-        let ey = polygon[j].y - polygon[i].y;
-        let denom = dx * ey - dy * ex;
-        if denom.abs() < 1e-12 {
+    for ring in rings {
+        let n = ring.len();
+        if n < 3 {
             continue;
         }
-        let t = ((polygon[i].x - p0.x) * ey - (polygon[i].y - p0.y) * ex) / denom;
-        let s = ((polygon[i].x - p0.x) * dy - (polygon[i].y - p0.y) * dx) / denom;
-        if (0.0..=1.0).contains(&s) {
-            ts.push(t);
+        for i in 0..n {
+            let a = ring[i];
+            let b = ring[(i + 1) % n];
+            let sa = side(a);
+            let sb = side(b);
+            if (sa > 0.0) == (sb > 0.0) {
+                continue;
+            }
+            let f = sa / (sa - sb);
+            let q = Point::new(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
+            ts.push(((q.x - p0.x) * dx + (q.y - p0.y) * dy) / len2);
         }
     }
-
     ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    ts.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
 
-    // Between consecutive pairs of intersections, check if midpoint is inside
     let mut segments = Vec::new();
-    for i in (0..ts.len()).step_by(2) {
-        if i + 1 >= ts.len() {
-            break;
+    for &[ta, tb] in ts.as_chunks::<2>().0 {
+        if (tb - ta) * len <= 1e-9 {
+            continue;
         }
-        let ta = ts[i];
-        let tb = ts[i + 1];
-        let mid_t = (ta + tb) / 2.0;
-        let mid = Point::new(p0.x + mid_t * dx, p0.y + mid_t * dy);
-        if geo::point_in_polygon(mid, polygon) {
-            let a = Point::new(p0.x + ta * dx, p0.y + ta * dy);
-            let b = Point::new(p0.x + tb * dx, p0.y + tb * dy);
-            segments.push((a, b));
-        }
+        segments.push((
+            Point::new(p0.x + ta * dx, p0.y + ta * dy),
+            Point::new(p0.x + tb * dx, p0.y + tb * dy),
+        ));
     }
     segments
+}
+
+/// Parallel hatch lines over a region (outer ring + holes, even-odd).
+/// Lines are anchored at multiples of `spacing` from the origin so that
+/// adjacent hatched regions line up. `angle` in radians.
+pub fn hatch_lines_for_rings(
+    rings: &[Vec<Point>],
+    angle: f64,
+    spacing: f64,
+) -> Vec<(Point, Point)> {
+    let all: Vec<Point> = rings.iter().flatten().copied().collect();
+    if all.len() < 3 || spacing <= 0.0 || !spacing.is_finite() {
+        return Vec::new();
+    }
+    let (cos_a, sin_a) = (angle.cos(), angle.sin());
+    let perp: Vec<f64> = all.iter().map(|p| -p.x * sin_a + p.y * cos_a).collect();
+    let min_d = perp.iter().cloned().fold(f64::MAX, f64::min);
+    let max_d = perp.iter().cloned().fold(f64::MIN, f64::max);
+    let (bx0, by0, bx1, by1) = geo::bounds_of(&all);
+    let diag = ((bx1 - bx0).powi(2) + (by1 - by0).powi(2)).sqrt() + 1.0;
+    // Centre of the region projected on the hatch direction, so the scan
+    // segment always spans the whole region.
+    let along_c = ((bx0 + bx1) / 2.0) * cos_a + ((by0 + by1) / 2.0) * sin_a;
+
+    let mut out = Vec::new();
+    let mut k = (min_d / spacing).floor() as i64;
+    if (k as f64) * spacing <= min_d + 1e-9 * spacing {
+        k += 1;
+    }
+    // Safety valve against absurd spacing/size ratios.
+    let max_lines = 200_000;
+    let mut count = 0;
+    loop {
+        let d = k as f64 * spacing;
+        if d >= max_d - 1e-9 * spacing || count > max_lines {
+            break;
+        }
+        let base = Point::new(-d * sin_a + along_c * cos_a, d * cos_a + along_c * sin_a);
+        let a = Point::new(base.x - diag * cos_a, base.y - diag * sin_a);
+        let b = Point::new(base.x + diag * cos_a, base.y + diag * sin_a);
+        out.extend(clip_line_to_rings(a, b, rings));
+        k += 1;
+        count += 1;
+    }
+    out
 }
 
 /// Extract the start/end points of an entity for connectivity checks.
