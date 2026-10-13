@@ -1,0 +1,18 @@
+[package]
+name = "smoke-csgrs"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "smoke-csgrs"
+path = "src/main.rs"
+[dependencies]
+csgrs = { git = "https://github.com/timschmidt/csgrs", rev = "69fbaf049f24ed4d8adfc3c86a791cc74732e85f", default-features = false }
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

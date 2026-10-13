@@ -1,0 +1,18 @@
+[package]
+name = "smoke-vcad"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "smoke-vcad"
+path = "src/main.rs"
+[dependencies]
+vcad-kernel = "0.10"
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]

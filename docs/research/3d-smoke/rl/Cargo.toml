@@ -1,0 +1,8 @@
+[package]
+name = "smoke-rl"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+renderling = { git = "https://github.com/schell/renderling", rev = "92caaba086dbd3ccd7d7e83adcb6738694351cf6" }
+
+[workspace]

@@ -1,0 +1,20 @@
+[package]
+name = "smoke-truck"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[[bin]]
+name = "smoke-truck"
+path = "src/main.rs"
+[dependencies]
+truck-modeling = "0.6"
+truck-shapeops = "0.4"
+truck-meshalgo = "0.4"
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+
+[workspace]
