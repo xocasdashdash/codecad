@@ -509,7 +509,7 @@ async function runYrsSyncForSession(
     const bounds = window.__CADVIEW_INITIAL_BOUNDS;
     setTimeout(() => {
       if (cad.currentSession() === sessionId) cad.zoomTo({ bounds });
-    }, 1000);
+    }, 5000);
   }
 
   const syncState: SessionSync = {
