@@ -114,7 +114,13 @@ async function flushAndWaitSync(): Promise<void> {
 
 // ── RPC over WebTransport ────────────────────────────────────────────
 
-let _transport: WebTransport | null = null;
+type StreamTransport = {
+  createBidirectionalStream(): Promise<{
+    readable: ReadableStream<Uint8Array>;
+    writable: WritableStream<Uint8Array>;
+  }>;
+};
+let _transport: StreamTransport | null = null;
 
 async function rpcCall(
   method: string,
@@ -354,40 +360,48 @@ declare global {
   }
 }
 
-async function connectWebTransport(): Promise<WebTransport | null> {
-  const port = window.__CADVIEW_WT_PORT;
-  const certHash = window.__CADVIEW_CERT_HASH;
-  if (!port || !certHash) return null;
-
-  const url = `https://localhost:${port}`;
-  console.log(`[CodeCAD] Connecting WebTransport to ${url}...`);
-
-  try {
-    const transport = new WebTransport(url, {
-      serverCertificateHashes: [
-        { algorithm: "sha-256", value: certHash.buffer as ArrayBuffer },
-      ],
-    });
-    await transport.ready;
-    console.log("[CodeCAD] WebTransport connected");
-    _transport = transport;
-    _reconnectDelay = 1000;
-
-    transport.closed
-      .then((info) => {
-        console.log("[CodeCAD] WebTransport closed:", info?.reason || "");
-        scheduleReconnect();
-      })
-      .catch((e: Error) => {
-        console.warn("[CodeCAD] WebTransport closed with error:", e.message);
-        scheduleReconnect();
+// One WebSocket per logical stream preserves the existing framed sync/RPC
+// protocol while allowing a conventional same-origin HTTPS reverse proxy.
+async function connectWebTransport(): Promise<StreamTransport | null> {
+  const token = window.__CADVIEW_TOKEN;
+  if (!token) return null;
+  const url = new URL("/api/stream", window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  const transport: StreamTransport = {
+    async createBidirectionalStream() {
+      const socket = new WebSocket(url);
+      socket.binaryType = "arraybuffer";
+      await new Promise<void>((resolve, reject) => {
+        socket.onopen = () => resolve();
+        socket.onerror = () => reject(new Error("WebSocket connection failed"));
       });
-
-    return transport;
-  } catch (e) {
-    console.warn(`[CodeCAD] WebTransport failed: ${(e as Error).message}`);
-    return null;
-  }
+      socket.send(token);
+      let controller: ReadableStreamDefaultController<Uint8Array>;
+      const readable = new ReadableStream<Uint8Array>({
+        start(c) { controller = c; },
+        cancel() { socket.close(); },
+      });
+      socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        controller.enqueue(new Uint8Array(event.data));
+      };
+      let closed = false;
+      socket.onclose = () => {
+        if (!closed) { closed = true; controller.close(); }
+      };
+      socket.onerror = () => {
+        if (!closed) { closed = true; controller.error(new Error("WebSocket failed")); }
+      };
+      const writable = new WritableStream<Uint8Array>({
+        write(chunk) { socket.send(new Uint8Array(chunk)); },
+        close() { socket.close(); },
+        abort() { socket.close(); },
+      });
+      return { readable, writable };
+    },
+  };
+  _transport = transport;
+  _reconnectDelay = 1000;
+  return transport;
 }
 
 function scheduleReconnect(): void {
@@ -465,7 +479,7 @@ class FrameReader {
 // ── Yrs sync over WebTransport ──────────────────────────────────────
 
 async function runYrsSyncForSession(
-  transport: WebTransport,
+  transport: StreamTransport,
   sessionId: string,
 ): Promise<void> {
   const bidi = await transport.createBidirectionalStream();
@@ -507,7 +521,9 @@ async function listenForServerUpdates(
       const update = await frameReader.readMessage();
       if (update.byteLength > 0) yrs_apply_update(sessionId, update);
     } catch {
+      const sync = _syncStreams.get(sessionId);
       _syncStreams.delete(sessionId);
+      if (sync && !sync.closing) scheduleReconnect();
       break;
     }
   }

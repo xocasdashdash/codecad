@@ -11,6 +11,7 @@
 use crate::registry::DocumentRegistry;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use wtransport::Connection;
 
 /// Session handler using DocumentRegistry.
@@ -30,95 +31,95 @@ pub async fn handle_session_v2(
 ) {
     tracing::info!("WebTransport session connected");
 
-    // Determine default doc key (first available, for backward compat)
-    let default_doc_key = {
-        let reg = registry.lock().await;
-        let available = reg.list_available();
-        available.first().map(|d| d.id.clone()).unwrap_or_default()
-    };
-
-    // Accept all bidi streams and classify them
     loop {
-        let (mut send, mut recv) = match conn.accept_bi().await {
+        let (send, recv) = match conn.accept_bi().await {
             Ok(streams) => streams,
             Err(e) => {
                 tracing::debug!("Session ended: {e}");
                 break;
             }
         };
+        tokio::spawn(handle_stream(send, recv, registry.clone(), sandbox.clone()));
+    }
+}
 
-        let reg = registry.clone();
-        let sb = sandbox.clone();
-        let default_key = default_doc_key.clone();
+/// Handle one framed bidirectional stream, independent of its transport.
+pub async fn handle_stream<W, R>(
+    mut send: W,
+    mut recv: R,
+    reg: Arc<Mutex<DocumentRegistry>>,
+    sb: Arc<cadview_sandbox::Sandbox>,
+) where
+    W: AsyncWrite + Unpin,
+    R: AsyncRead + Unpin,
+{
+    let default_key = {
+        let registry = reg.lock().await;
+        registry.list_available().first().map(|d| d.id.clone()).unwrap_or_default()
+    };
+    // Read the first message to classify the stream
+    let first_msg = match read_message(&mut recv).await {
+        Ok(msg) => msg,
+        Err(e) => {
+            tracing::warn!("Stream read error: {e}");
+            return;
+        }
+    };
 
-        tokio::spawn(async move {
-            // Read the first message to classify the stream
-            let first_msg = match read_message(&mut recv).await {
-                Ok(msg) => msg,
-                Err(e) => {
-                    tracing::warn!("Stream read error: {e}");
-                    return;
-                }
-            };
-
-            // Try to parse as JSON RPC
-            if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
-                if req.get("method").is_some() {
-                    // It's an RPC call
-                    let response = handle_rpc_call(&first_msg, reg, &default_key, &sb).await;
-                    let _ = write_message(&mut send, response.as_bytes()).await;
-                    return;
-                }
-            }
-
-            // Not an RPC. Check if it's a sync header (JSON with "type":"document")
-            // or a raw SV (old protocol backward compat).
-            let (doc_key, client_sv) =
-                if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
-                    if header.get("type").and_then(|t| t.as_str()) == Some("document") {
-                        let id = header["id"].as_str().unwrap_or(&default_key).to_string();
-                        // Read the actual SV as the next message
-                        let sv = match read_message(&mut recv).await {
-                            Ok(sv) => sv,
-                            Err(e) => {
-                                tracing::warn!("Failed to read SV: {e}");
-                                return;
-                            }
-                        };
-                        (id, sv)
-                    } else {
-                        // Unknown JSON, treat first_msg as raw SV
-                        (default_key.clone(), first_msg)
-                    }
-                } else {
-                    // Binary data = raw SV (old protocol)
-                    (default_key.clone(), first_msg)
-                };
-
-            // Ensure document slot exists (creates empty slot for new docs)
-            {
-                let mut r = reg.lock().await;
-                if let Err(e) = r.get_or_load(&doc_key) {
-                    tracing::error!("Failed to load/create '{}': {e}", doc_key);
-                    return;
-                }
-            }
-
-            tracing::info!("Yrs sync stream for '{}'", doc_key);
-            if let Err(e) = run_yrs_sync_with_first_msg(send, recv, client_sv, reg, &doc_key).await
-            {
-                tracing::warn!("Yrs sync ended for '{}': {e}", doc_key);
-            }
-        });
+    // Try to parse as JSON RPC
+    if let Ok(req) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
+        if req.get("method").is_some() {
+            // It's an RPC call
+            let response = handle_rpc_call(&first_msg, reg, &default_key, &sb).await;
+            let _ = write_message(&mut send, response.as_bytes()).await;
+            return;
+        }
     }
 
-    tracing::info!("WebTransport session disconnected");
+    // Not an RPC. Check if it's a sync header (JSON with "type":"document")
+    // or a raw SV (old protocol backward compat).
+    let (doc_key, client_sv) =
+        if let Ok(header) = serde_json::from_slice::<serde_json::Value>(&first_msg) {
+            if header.get("type").and_then(|t| t.as_str()) == Some("document") {
+                let id = header["id"].as_str().unwrap_or(&default_key).to_string();
+                // Read the actual SV as the next message
+                let sv = match read_message(&mut recv).await {
+                    Ok(sv) => sv,
+                    Err(e) => {
+                        tracing::warn!("Failed to read SV: {e}");
+                        return;
+                    }
+                };
+                (id, sv)
+            } else {
+                // Unknown JSON, treat first_msg as raw SV
+                (default_key.clone(), first_msg)
+            }
+        } else {
+            // Binary data = raw SV (old protocol)
+            (default_key.clone(), first_msg)
+        };
+
+    // Ensure document slot exists (creates empty slot for new docs)
+    {
+        let mut r = reg.lock().await;
+        if let Err(e) = r.get_or_load(&doc_key) {
+            tracing::error!("Failed to load/create '{}': {e}", doc_key);
+            return;
+        }
+    }
+
+    tracing::info!("Yrs sync stream for '{}'", doc_key);
+    if let Err(e) = run_yrs_sync_with_first_msg(send, recv, client_sv, reg, &doc_key).await
+    {
+        tracing::warn!("Yrs sync ended for '{}': {e}", doc_key);
+    }
 }
 
 /// Long-lived Yrs sync where the first message (client SV) was already read.
-async fn run_yrs_sync_with_first_msg(
-    mut send: wtransport::SendStream,
-    recv: wtransport::RecvStream,
+async fn run_yrs_sync_with_first_msg<W: AsyncWrite + Unpin, R: AsyncRead + Unpin>(
+    mut send: W,
+    recv: R,
     client_sv: Vec<u8>,
     registry: Arc<Mutex<DocumentRegistry>>,
     doc_key: &str,
@@ -425,7 +426,7 @@ async fn handle_rpc_call(
 
 // ── Framing helpers ───────────────────────────────────────────────────
 
-async fn write_message(send: &mut wtransport::SendStream, data: &[u8]) -> anyhow::Result<()> {
+async fn write_message<W: AsyncWrite + Unpin>(send: &mut W, data: &[u8]) -> anyhow::Result<()> {
     let mut frame = Vec::with_capacity(4 + data.len());
     frame.extend_from_slice(&(data.len() as u32).to_be_bytes());
     frame.extend_from_slice(data);
@@ -435,7 +436,7 @@ async fn write_message(send: &mut wtransport::SendStream, data: &[u8]) -> anyhow
     Ok(())
 }
 
-async fn read_message(recv: &mut wtransport::RecvStream) -> anyhow::Result<Vec<u8>> {
+async fn read_message<R: AsyncRead + Unpin>(recv: &mut R) -> anyhow::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
     recv.read_exact(&mut len_buf)
         .await
@@ -449,4 +450,28 @@ async fn read_message(recv: &mut wtransport::RecvStream) -> anyhow::Result<Vec<u
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod framing_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn frames_round_trip_over_byte_streams() {
+        let (mut sender, mut receiver) = tokio::io::duplex(128);
+        let sent = tokio::spawn(async move {
+            write_message(&mut sender, b"hello").await.unwrap();
+            write_message(&mut sender, b"world").await.unwrap();
+        });
+        assert_eq!(read_message(&mut receiver).await.unwrap(), b"hello");
+        assert_eq!(read_message(&mut receiver).await.unwrap(), b"world");
+        sent.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_frames() {
+        let (mut sender, mut receiver) = tokio::io::duplex(16);
+        sender.write_all(&(64u32 * 1024 * 1024 + 1).to_be_bytes()).await.unwrap();
+        assert!(read_message(&mut receiver).await.is_err());
+    }
 }

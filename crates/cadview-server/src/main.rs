@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
         .to_vec();
 
     let wt_config = wtransport::ServerConfig::builder()
-        .with_bind_default(0)
+        .with_bind_address(SocketAddr::from(([127, 0, 0, 1], 0)))
         .with_identity(identity)
         .build();
     let wt_endpoint = wtransport::Endpoint::server(wt_config)?;

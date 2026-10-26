@@ -2,7 +2,11 @@
 
 use crate::assets::{self, AssetProvider};
 use crate::registry::DocumentRegistry;
-use axum::extract::State;
+use axum::extract::{State, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocket};
+use axum::http::HeaderMap;
+use futures_util::{SinkExt, StreamExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Json};
 use axum::routing::{get, post};
@@ -21,11 +25,95 @@ pub struct HttpState {
 
 pub fn router(state: Arc<HttpState>) -> Router {
     Router::new()
+        .route("/api/stream", get(stream_handler))
         .route("/api/documents", get(documents_handler))
         .route("/api/run", post(run_handler))
         .route("/", get(index_handler))
         .route("/{*path}", get(static_handler))
         .with_state(state)
+}
+
+// The reverse proxy must authenticate the upgrade just like every other route.
+// Origin validation prevents a different website from using a browser's login cookie.
+async fn stream_handler(
+    State(state): State<Arc<HttpState>>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> impl IntoResponse {
+    let same_origin = valid_stream_origin(&headers);
+    if !same_origin {
+        return (StatusCode::FORBIDDEN, "Invalid WebSocket origin").into_response();
+    }
+    upgrade.on_upgrade(move |socket| websocket_stream(socket, state)).into_response()
+}
+
+fn valid_stream_origin(headers: &HeaderMap) -> bool {
+    let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+    let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+    // The backend is loopback-only: the trusted reverse proxy must replace
+    // forwarded headers supplied by clients.
+    let scheme = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("http");
+    match (origin, host, scheme) {
+        (Some(origin), Some(host), "http" | "https") => origin == format!("{scheme}://{host}"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+    #[test]
+    fn rejects_cross_origin_and_missing_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "codecad.example.com".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert!(!valid_stream_origin(&headers));
+        headers.insert(header::ORIGIN, "https://evil.example.com".parse().unwrap());
+        assert!(!valid_stream_origin(&headers));
+        headers.insert(header::ORIGIN, "http://codecad.example.com".parse().unwrap());
+        assert!(!valid_stream_origin(&headers));
+        headers.insert(header::ORIGIN, "https://codecad.example.com".parse().unwrap());
+        assert!(valid_stream_origin(&headers));
+    }
+}
+
+async fn websocket_stream(mut socket: WebSocket, state: Arc<HttpState>) {
+    // The token is sent after upgrade, never in the URL or server access logs.
+    let auth = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await;
+    match auth {
+        Ok(Some(Ok(Message::Text(token)))) if token.as_str() == state.token => {}
+        _ => return,
+    }
+    let (stream, bridge) = tokio::io::duplex(65536);
+    let (reader, writer) = tokio::io::split(stream);
+    let (mut bridge_reader, mut bridge_writer) = tokio::io::split(bridge);
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+    let incoming = async move {
+        while let Some(Ok(message)) = ws_receiver.next().await {
+            match message {
+                Message::Binary(data) => {
+                    if bridge_writer.write_all(&data).await.is_err() { break; }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    };
+    let outgoing = async move {
+        let mut buffer = vec![0u8; 65536];
+        loop {
+            match bridge_reader.read(&mut buffer).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => if ws_sender.send(Message::Binary(buffer[..n].to_vec().into())).await.is_err() { break; },
+            }
+        }
+    };
+    let handler = tokio::spawn(crate::transport::handle_stream(writer, reader, state.registry.clone(), state.sandbox.clone()));
+    tokio::select! {
+        _ = incoming => {},
+        _ = outgoing => {},
+    }
+    handler.abort();
 }
 
 // ── API handlers ────────────────────────────────────────────────────
@@ -89,10 +177,10 @@ async fn index_handler(State(state): State<Arc<HttpState>>) -> impl IntoResponse
         .map(|b| format!("0x{b:02x}"))
         .collect();
     let inject = format!(
-        r#"<script>window.__CADVIEW_WT_PORT={};window.__CADVIEW_CERT_HASH=new Uint8Array([{}]);window.__CADVIEW_TOKEN="{}";</script>"#,
+        r#"<script>window.__CADVIEW_WT_PORT={};window.__CADVIEW_CERT_HASH=new Uint8Array([{}]);window.__CADVIEW_TOKEN={};</script>"#,
         state.wt_port,
         hash_hex.join(","),
-        state.token,
+        serde_json::to_string(&state.token).expect("token is serializable").replace('<', "\\u003c"),
     );
     let html = html.replace("</head>", &format!("{inject}\n</head>"));
 
