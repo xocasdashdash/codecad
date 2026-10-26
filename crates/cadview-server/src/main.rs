@@ -40,6 +40,7 @@ Options:
 Environment:
   CADVIEW_TOKEN       Bearer token for the HTTP API and WebTransport
                       (default: cadview-local-dev)
+  CADVIEW_HTTP_PORT   Loopback HTTP port (default: 8765)
   RUST_LOG            Log filter, e.g. RUST_LOG=info
 ";
 
@@ -162,7 +163,10 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("WebTransport listening on port {wt_port}");
 
     // HTTP server
-    let http_port = 8765;
+    let http_port: u16 = std::env::var("CADVIEW_HTTP_PORT")
+        .unwrap_or_else(|_| "8765".to_owned())
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid CADVIEW_HTTP_PORT: {e}"))?;
     let http_state = Arc::new(http::HttpState {
         dist,
         cert_hash,
