@@ -70,6 +70,12 @@ export function onTabRenamed(
 
 // ── Internal helpers ─────────────────────────────────────────────────
 
+// Yjs encodes a no-op V1 update as two zero bytes. Do not broadcast it:
+// rebuilding a large document on every read-only UI query is expensive.
+function hasSyncChanges(update: Uint8Array): boolean {
+  return update.byteLength > 0 && !(update.byteLength === 2 && update[0] === 0 && update[1] === 0);
+}
+
 let _syncScheduled = false;
 function schedulePendingSync(): void {
   if (_syncScheduled) return;
@@ -88,7 +94,7 @@ function flushPendingSync(): void {
   if (!sync || sync.closing) return;
 
   const update = yrs_pending_update(sessionId);
-  if (update.byteLength > 0) {
+  if (hasSyncChanges(update)) {
     writeMessage(sync.writer, update).catch((e) =>
       console.warn(`[CodeCAD] Failed to send Yrs update for ${sessionId}:`, e),
     );
@@ -106,7 +112,7 @@ async function flushAndWaitSync(): Promise<void> {
   if (!sync || sync.closing) return;
 
   const update = yrs_pending_update(sessionId);
-  if (update.byteLength > 0) {
+  if (hasSyncChanges(update)) {
     await writeMessage(sync.writer, update);
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -244,7 +250,14 @@ function downloadBlob(
 const cadCore = buildCadApi({
   call: (method, argsJson) => {
     const raw = cad_call(method, argsJson);
-    schedulePendingSync();
+    if (method === "entities" && !_syncScheduled) {
+      // The WASM dispatcher snapshots sync state even for this read-only
+      // query. Clear that snapshot without broadcasting a stale delete set.
+      const sid = session_current();
+      if (sid && sid !== "null") yrs_pending_update(JSON.parse(sid));
+    } else {
+      schedulePendingSync();
+    }
     return raw;
   },
   rpc: (method, argsJson) => {
