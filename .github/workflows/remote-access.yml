@@ -1,6 +1,7 @@
 name: Remote access build
 on:
-  workflow_dispatch:
+  push:
+    branches: [remote-access]
 permissions:
   contents: read
 jobs:
