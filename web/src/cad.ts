@@ -357,6 +357,7 @@ declare global {
     __CADVIEW_WT_PORT?: number;
     __CADVIEW_CERT_HASH?: Uint8Array;
     __CADVIEW_TOKEN?: string;
+    __CADVIEW_INITIAL_BOUNDS?: { min: [number, number]; max: [number, number] };
   }
 }
 
@@ -502,6 +503,15 @@ async function runYrsSyncForSession(
 
   console.log(`[CodeCAD] Yrs sync complete for session '${sessionId}'`);
 
+  // Apply an optional initial view once, without changing the drawing.
+  if (!initialViewApplied && sessionId === _initialSessionId && window.__CADVIEW_INITIAL_BOUNDS) {
+    initialViewApplied = true;
+    const bounds = window.__CADVIEW_INITIAL_BOUNDS;
+    setTimeout(() => {
+      if (cad.currentSession() === sessionId) cad.zoomTo({ bounds });
+    }, 1000);
+  }
+
   const syncState: SessionSync = {
     writer,
     reader: frameReader,
@@ -531,6 +541,7 @@ async function listenForServerUpdates(
 
 // ── Init ─────────────────────────────────────────────────────────────
 
+let initialViewApplied = false;
 let _initialSessionId = "default";
 let _serverAvailable = false;
 
