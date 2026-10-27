@@ -260,6 +260,36 @@ body {
   display: block;
 }
 
+.viewport-container.markup-active canvas {
+  pointer-events: none;
+}
+
+.markup-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.tab-tool {
+  padding: 0 10px;
+  border: 0;
+  border-left: 1px solid #1e2430;
+  background: none;
+  color: var(--muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tab-tool:hover,
+.tab-tool.active {
+  color: #ff40a0;
+}
+
 /* ── Document picker ─────────────────────────────────────────────────── */
 
 .doc-picker-overlay {

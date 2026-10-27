@@ -11,9 +11,12 @@ interface Props {
   onAdd: () => void;
   onCompare: () => void;
   comparing: boolean;
+  markupMode: boolean;
+  onToggleMarkup: () => void;
+  onClearMarkup: () => void;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onCompare, comparing }: Props) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onCompare, comparing, markupMode, onToggleMarkup, onClearMarkup }: Props) {
   return (
     <div className="tab-bar">
       {tabs.map((tab) => (
@@ -36,6 +39,13 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onCompare, co
       ))}
       <button className="tab-add" onClick={onAdd}>
         +
+      </button>
+      <button className={`tab-tool${markupMode ? " active" : ""}`} onClick={onToggleMarkup}
+        title="Draw feedback marks over the active drawing. Hold Shift for a straight line.">
+        {markupMode ? "Done" : "Draw"}
+      </button>
+      <button className="tab-tool" onClick={onClearMarkup} title="Remove feedback marks from the active drawing">
+        Clear marks
       </button>
       <button className={`tab-compare${comparing ? " active" : ""}`}
         onClick={onCompare} title="Show two drawings side by side">

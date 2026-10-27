@@ -11,6 +11,7 @@ import init, {
   export_pdf_bytes,
   session_create,
   session_current,
+  screen_to_world,
   session_destroy,
   session_list,
   session_load_dwg,
@@ -286,6 +287,12 @@ export const cad = {
   currentSession(): string | null {
     const raw = session_current();
     return JSON.parse(raw) as string | null;
+  },
+
+  screenToWorld(sessionId: string, x: number, y: number): [number, number] {
+    const result = JSON.parse(screen_to_world(sessionId, x, y));
+    if (result.error) throw new Error(result.error);
+    return [result.x, result.y];
   },
 
   // Override save/saveDwg to flush sync + rename tabs.

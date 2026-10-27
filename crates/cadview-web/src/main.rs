@@ -230,6 +230,20 @@ pub fn session_current() -> String {
     }
 }
 
+/// Convert viewport-local screen coordinates to drawing coordinates.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+pub fn screen_to_world(session_id: &str, x: f64, y: f64) -> String {
+    let reg = SESSIONS.lock().unwrap();
+    let Some(session) = reg.sessions.get(session_id) else {
+        return r#"{"error":"session not found"}"#.to_string();
+    };
+    let (width, height) = session.screen_size;
+    let world_x = (x - width as f64 / 2.0) / session.camera.zoom + session.camera.center_x;
+    let world_y = -(y - height as f64 / 2.0) / session.camera.zoom + session.camera.center_y;
+    format!(r#"{{"x":{},"y":{}}}"#, world_x, world_y)
+}
+
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn session_list() -> String {

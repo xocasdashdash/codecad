@@ -35,6 +35,7 @@ export function App() {
   const [panelOpen, setPanelOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [markupMode, setMarkupMode] = useState(false);
 
   // Register tab rename callback (called by cad.save/saveDwg)
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs once on mount
@@ -282,6 +283,17 @@ export function App() {
           }
         }}
         comparing={compareTabId !== null}
+        markupMode={markupMode}
+        onToggleMarkup={() => setMarkupMode((value) => !value)}
+        onClearMarkup={() => {
+          try {
+            cad.useSession(activeTabId);
+            const marks = cad.entities({ layer: "E_FEEDBACK_MARKS" });
+            if (marks.length) cad.remove(marks);
+          } catch (error) {
+            console.error("[CodeCAD] Could not clear feedback marks:", error);
+          }
+        }}
       />
 
       <div className={`viewport-area${compareTabId ? " compare" : ""}`}>
@@ -290,12 +302,12 @@ export function App() {
           if (!tab) return null;
           return <div className="compare-pane" key={id}>
             <div className="compare-header">{tab.label}</div>
-            <ViewportContainer sessionId={id} focused={activeTabId === id}
+            <ViewportContainer sessionId={id} focused={activeTabId === id} markupMode={markupMode}
               onFocus={() => activateTab(id)} />
           </div>;
         }) : activeTab && (
           <ViewportContainer key={activeTab.id} sessionId={activeTab.id}
-            focused={true} onFocus={() => {}} />
+            focused={true} markupMode={markupMode} onFocus={() => {}} />
         )}
         {dragOver && (
           <div className="drop-overlay">
