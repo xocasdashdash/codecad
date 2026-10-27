@@ -9,9 +9,11 @@ interface Props {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onAdd: () => void;
+  onCompare: () => void;
+  comparing: boolean;
 }
 
-export function TabBar({ tabs, activeId, onSelect, onClose, onAdd }: Props) {
+export function TabBar({ tabs, activeId, onSelect, onClose, onAdd, onCompare, comparing }: Props) {
   return (
     <div className="tab-bar">
       {tabs.map((tab) => (
@@ -34,6 +36,10 @@ export function TabBar({ tabs, activeId, onSelect, onClose, onAdd }: Props) {
       ))}
       <button className="tab-add" onClick={onAdd}>
         +
+      </button>
+      <button className={`tab-compare${comparing ? " active" : ""}`}
+        onClick={onCompare} title="Show two drawings side by side">
+        {comparing ? "Single view" : "Compare"}
       </button>
     </div>
   );

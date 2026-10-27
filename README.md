@@ -22,6 +22,10 @@ tool and the data.
   Dual renderer: Vello (GPU compute, WebGPU) with egui CPU fallback.
 - **Multi-document tabs**: several drawings side-by-side, each with
   isolated camera, layers, and undo history.
+- **Side-by-side comparison**: use **Compare** when two drawings are open.
+  A server can set `window.__CADVIEW_COMPARE_DOC_ID` to open a second drawing
+  automatically beside its initial drawing. Optional
+  `window.__CADVIEW_INITIAL_BOUNDS` frames both comparison panes.
 - **Scriptable**: every drawing operation is a `cad_call(method, args_json)`
   you can drive from the browser console or your own code.
 

@@ -29,6 +29,8 @@ export function App() {
       .pop() || initId;
   const [tabs, setTabs] = useState<Tab[]>([{ id: initId, label: initLabel }]);
   const [activeTabId, setActiveTabId] = useState<string>(initId);
+  const [comparePrimaryId, setComparePrimaryId] = useState<string>(initId);
+  const [compareTabId, setCompareTabId] = useState<string | null>(null);
   const [layers, setLayers] = useState<LayerState[]>([]);
   const [panelOpen, setPanelOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -57,10 +59,30 @@ export function App() {
         })
         .catch((e) => console.error(`[CodeCAD] ?file= load failed: ${e}`));
     }
+
+    // Optional server-configured comparison: open the second drawing in its
+    // own synced session and show both canvases at once.
+    const compareDocId = (
+      window as Window & { __CADVIEW_COMPARE_DOC_ID?: string }
+    ).__CADVIEW_COMPARE_DOC_ID;
+    if (compareDocId && compareDocId !== initId) {
+      cad.api.listDocuments().then((docs) => {
+        if (!docs.some((doc) => doc.id === compareDocId)) return;
+        cad.sessions.create(compareDocId);
+        setTabs((prev) => prev.some((tab) => tab.id === compareDocId)
+          ? prev
+          : [...prev, {
+              id: compareDocId,
+              label: compareDocId.replace(/\.dwg$/i, "").split("/").pop() || compareDocId,
+            }]);
+        setCompareTabId(compareDocId);
+      }).catch((e) => console.error(`[CodeCAD] Compare setup failed: ${e}`));
+    }
   }, []);
 
   // Switch active tab
   function activateTab(id: string) {
+    if (id !== comparePrimaryId && id !== compareTabId) setCompareTabId(null);
     setActiveTabId(id);
     try {
       cad.useSession(id);
@@ -71,26 +93,23 @@ export function App() {
 
   // Open a server document
   function openDocument(docId: string) {
+    if (tabs.some((tab) => tab.id === docId)) {
+      activateTab(docId);
+      return;
+    }
     const label =
       docId
         .replace(/\.dwg$/i, "")
         .split("/")
         .pop() || docId;
-    let sessionId = docId;
-    let suffix = 1;
-    while (tabs.some((t) => t.id === sessionId)) {
-      suffix++;
-      sessionId = `${docId}#${suffix}`;
-    }
-    const displayLabel = suffix > 1 ? `${label} (${suffix})` : label;
     try {
-      cad.sessions.create(sessionId);
+      cad.sessions.create(docId);
     } catch (e) {
       console.warn("Failed to create session:", e);
       return;
     }
-    setTabs((prev) => [...prev, { id: sessionId, label: displayLabel }]);
-    activateTab(sessionId);
+    setTabs((prev) => [...prev, { id: docId, label }]);
+    activateTab(docId);
   }
 
   // New empty drawing
@@ -149,6 +168,7 @@ export function App() {
 
   // Close a tab
   function closeTab(id: string) {
+    if (id === compareTabId || id === comparePrimaryId) setCompareTabId(null);
     try {
       cad.sessions.destroy(id);
     } catch {
@@ -250,16 +270,32 @@ export function App() {
         onSelect={activateTab}
         onClose={closeTab}
         onAdd={() => setPickerOpen(true)}
+        onCompare={() => {
+          if (compareTabId) setCompareTabId(null);
+          else {
+            const other = tabs.find((tab) => tab.id !== activeTabId);
+            if (other) {
+              setComparePrimaryId(activeTabId);
+              setCompareTabId(other.id);
+            }
+            else setPickerOpen(true);
+          }
+        }}
+        comparing={compareTabId !== null}
       />
 
-      <div className="viewport-area">
-        {activeTab && (
-          <ViewportContainer
-            key={activeTab.id}
-            sessionId={activeTab.id}
-            focused={true}
-            onFocus={() => {}}
-          />
+      <div className={`viewport-area${compareTabId ? " compare" : ""}`}>
+        {compareTabId ? [comparePrimaryId, compareTabId].map((id) => {
+          const tab = tabs.find((candidate) => candidate.id === id);
+          if (!tab) return null;
+          return <div className="compare-pane" key={id}>
+            <div className="compare-header">{tab.label}</div>
+            <ViewportContainer sessionId={id} focused={activeTabId === id}
+              onFocus={() => activateTab(id)} />
+          </div>;
+        }) : activeTab && (
+          <ViewportContainer key={activeTab.id} sessionId={activeTab.id}
+            focused={true} onFocus={() => {}} />
         )}
         {dragOver && (
           <div className="drop-overlay">

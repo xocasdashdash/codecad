@@ -371,6 +371,7 @@ declare global {
     __CADVIEW_CERT_HASH?: Uint8Array;
     __CADVIEW_TOKEN?: string;
     __CADVIEW_INITIAL_BOUNDS?: { min: [number, number]; max: [number, number] };
+    __CADVIEW_COMPARE_DOC_ID?: string;
   }
 }
 
@@ -516,12 +517,22 @@ async function runYrsSyncForSession(
 
   console.log(`[CodeCAD] Yrs sync complete for session '${sessionId}'`);
 
-  // Apply an optional initial view once, without changing the drawing.
-  if (!initialViewApplied && sessionId === _initialSessionId && window.__CADVIEW_INITIAL_BOUNDS) {
-    initialViewApplied = true;
+  // Apply configured bounds to both comparison drawings. Preserve the
+  // focused session while setting the camera on the other document.
+  if (!initialViewApplied.has(sessionId) &&
+      (sessionId === _initialSessionId || sessionId === window.__CADVIEW_COMPARE_DOC_ID) &&
+      window.__CADVIEW_INITIAL_BOUNDS) {
+    initialViewApplied.add(sessionId);
     const bounds = window.__CADVIEW_INITIAL_BOUNDS;
     setTimeout(() => {
-      if (cad.currentSession() === sessionId) cad.zoomTo({ bounds });
+      try {
+        const focused = cad.currentSession();
+        cad.useSession(sessionId);
+        cad.zoomTo({ bounds });
+        if (focused && focused !== sessionId) cad.useSession(focused);
+      } catch (e) {
+        console.warn(`[CodeCAD] Initial view failed for '${sessionId}':`, e);
+      }
     }, 5000);
   }
 
@@ -554,7 +565,7 @@ async function listenForServerUpdates(
 
 // ── Init ─────────────────────────────────────────────────────────────
 
-let initialViewApplied = false;
+const initialViewApplied = new Set<string>();
 let _initialSessionId = "default";
 let _serverAvailable = false;
 
