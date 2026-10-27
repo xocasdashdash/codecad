@@ -55,3 +55,32 @@ jobs:
         with:
           name: codecad-linux-x86_64
           path: artifact/
+
+  server-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: remote-package
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cd web && pnpm install --frozen-lockfile
+      - name: Build sandbox
+        run: bash sandbox-component/build.sh
+      - name: Build server for an external frontend
+        run: cargo build --release --locked -p cadview-server
+      - name: Package artifact
+        run: |
+          mkdir -p artifact
+          cp target/release/cadview-server artifact/codecad
+          (cd artifact && sha256sum codecad > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codecad-linux-server
+          path: artifact/

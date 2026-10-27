@@ -52,9 +52,14 @@ fn valid_stream_origin(headers: &HeaderMap) -> bool {
     let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
     // The backend is loopback-only: the trusted reverse proxy must replace
     // forwarded headers supplied by clients.
-    let scheme = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("http");
-    match (origin, host, scheme) {
-        (Some(origin), Some(host), "http" | "https") => origin == format!("{scheme}://{host}"),
+    let forwarded_scheme = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("http");
+    let scheme = match forwarded_scheme {
+        "https" | "wss" => "https",
+        "http" | "ws" => "http",
+        _ => return false,
+    };
+    match (origin, host) {
+        (Some(origin), Some(host)) => origin == format!("{scheme}://{host}"),
         _ => false,
     }
 }
@@ -74,6 +79,14 @@ mod origin_tests {
         assert!(!valid_stream_origin(&headers));
         headers.insert(header::ORIGIN, "https://codecad.example.com".parse().unwrap());
         assert!(valid_stream_origin(&headers));
+        headers.insert("x-forwarded-proto", "wss".parse().unwrap());
+        assert!(valid_stream_origin(&headers));
+        headers.insert(header::ORIGIN, "http://codecad.example.com".parse().unwrap());
+        assert!(!valid_stream_origin(&headers));
+        headers.insert("x-forwarded-proto", "ws".parse().unwrap());
+        assert!(valid_stream_origin(&headers));
+        headers.insert("x-forwarded-proto", "ftp".parse().unwrap());
+        assert!(!valid_stream_origin(&headers));
     }
 }
 
