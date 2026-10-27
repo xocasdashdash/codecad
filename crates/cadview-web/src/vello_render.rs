@@ -384,6 +384,7 @@ fn render_frame(state: &mut VelloState) {
     let sw = width as f64;
     let sh = height as f64;
     session.screen_size = (width as f32, height as f32);
+    session.screen_scale = web_sys::window().unwrap().device_pixel_ratio();
 
     // Camera commands / auto-fit
     let entity_count = session.doc.entities.len();

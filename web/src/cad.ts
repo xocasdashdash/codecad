@@ -289,8 +289,8 @@ export const cad = {
     return JSON.parse(raw) as string | null;
   },
 
-  screenToWorld(sessionId: string, x: number, y: number, pixelRatio = 1): [number, number] {
-    const result = JSON.parse(screen_to_world(sessionId, x, y, pixelRatio));
+  screenToWorld(sessionId: string, x: number, y: number): [number, number] {
+    const result = JSON.parse(screen_to_world(sessionId, x, y));
     if (result.error) throw new Error(result.error);
     return [result.x, result.y];
   },

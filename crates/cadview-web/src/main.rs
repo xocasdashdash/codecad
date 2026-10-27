@@ -103,6 +103,7 @@ struct DocumentSession {
     camera_cmd: Option<CameraCmd>,
     camera: Camera,
     screen_size: (f32, f32),
+    screen_scale: f64,
     initialized: bool,
     last_entity_count: usize,
     cache: RenderCache,
@@ -121,6 +122,7 @@ impl DocumentSession {
             camera_cmd: None,
             camera: Camera::new(),
             screen_size: (1280.0, 800.0),
+            screen_scale: 1.0,
             initialized: false,
             last_entity_count: 0,
             render_dirty: false,
@@ -233,17 +235,14 @@ pub fn session_current() -> String {
 /// Convert viewport-local screen coordinates to drawing coordinates.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn screen_to_world(session_id: &str, x: f64, y: f64, pixel_ratio: f64) -> String {
+pub fn screen_to_world(session_id: &str, x: f64, y: f64) -> String {
     let reg = SESSIONS.lock().unwrap();
     let Some(session) = reg.sessions.get(session_id) else {
         return r#"{"error":"session not found"}"#.to_string();
     };
     let (width, height) = session.screen_size;
-    // The Vello renderer expresses its camera viewport in physical canvas
-    // pixels, while pointer events arrive in CSS pixels. The egui renderer
-    // keeps both in logical screen points, so the caller supplies 1 there.
-    let x = x * pixel_ratio;
-    let y = y * pixel_ratio;
+    let x = x * session.screen_scale;
+    let y = y * session.screen_scale;
     let world_x = (x - width as f64 / 2.0) / session.camera.zoom + session.camera.center_x;
     let world_y = -(y - height as f64 / 2.0) / session.camera.zoom + session.camera.center_y;
     format!(r#"{{"x":{},"y":{}}}"#, world_x, world_y)
@@ -771,6 +770,7 @@ impl eframe::App for CadViewApp {
 
         // Update screen size for this session (used by cad_call zoomTo)
         session.screen_size = (sw, sh);
+        session.screen_scale = 1.0 / ui.ctx().zoom_factor().max(0.01) as f64;
 
         // Process camera commands
         let entity_count = session.doc.entities.len();
