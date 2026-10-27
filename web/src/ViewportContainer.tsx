@@ -58,7 +58,8 @@ export function ViewportContainer({ sessionId, focused, markupMode, onFocus }: P
     if (points.length > 1) {
       try {
         cad.useSession(sessionId);
-        const worldPoints = points.map(({ x, y }) => cad.screenToWorld(sessionId, x, y));
+        const pixelRatio = cad.viewport.rendererType === "vello" ? window.devicePixelRatio : 1;
+        const worldPoints = points.map(({ x, y }) => cad.screenToWorld(sessionId, x, y, pixelRatio));
         cad.addPolyline(worldPoints, { layer: "E_FEEDBACK_MARKS", color: [255, 64, 160], lineweight: 0.8 });
       } catch (error) {
         console.error("[CodeCAD] Could not save markup stroke:", error);

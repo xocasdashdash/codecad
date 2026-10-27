@@ -233,12 +233,17 @@ pub fn session_current() -> String {
 /// Convert viewport-local screen coordinates to drawing coordinates.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
-pub fn screen_to_world(session_id: &str, x: f64, y: f64) -> String {
+pub fn screen_to_world(session_id: &str, x: f64, y: f64, pixel_ratio: f64) -> String {
     let reg = SESSIONS.lock().unwrap();
     let Some(session) = reg.sessions.get(session_id) else {
         return r#"{"error":"session not found"}"#.to_string();
     };
     let (width, height) = session.screen_size;
+    // The Vello renderer expresses its camera viewport in physical canvas
+    // pixels, while pointer events arrive in CSS pixels. The egui renderer
+    // keeps both in logical screen points, so the caller supplies 1 there.
+    let x = x * pixel_ratio;
+    let y = y * pixel_ratio;
     let world_x = (x - width as f64 / 2.0) / session.camera.zoom + session.camera.center_x;
     let world_y = -(y - height as f64 / 2.0) / session.camera.zoom + session.camera.center_y;
     format!(r#"{{"x":{},"y":{}}}"#, world_x, world_y)

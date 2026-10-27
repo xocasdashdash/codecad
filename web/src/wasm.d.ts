@@ -11,7 +11,7 @@ declare module "cadview-wasm" {
   export function session_destroy(session_id: string): string;
   export function session_use(session_id: string): string;
   export function session_current(): string;
-  export function screen_to_world(session_id: string, x: number, y: number): string;
+  export function screen_to_world(session_id: string, x: number, y: number, pixel_ratio: number): string;
   export function session_list(): string;
   export function session_load_dwg(
     session_id: string,
